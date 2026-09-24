@@ -222,6 +222,16 @@
   #death-overlay .txt { font-size: 20px; color: #e0d7c6; text-shadow: 0 0 10px #000; }
   #death-overlay .sub { font-size: 12px; color: #b8ac95; margin-top: 8px; }
 
+  /* ---------- Wave banner ---------- */
+  #wave-banner {
+    position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%);
+    font-size: 18px; color: #e0d7c6; text-shadow: 0 0 12px #000, 0 0 4px #000;
+    background: rgba(0,0,0,0.5); border-radius: 8px; padding: 12px 24px;
+    pointer-events: none; opacity: 0; transition: opacity 0.6s;
+    text-align: center; z-index: 25; white-space: nowrap;
+  }
+  #wave-banner.visible { opacity: 1; }
+
   /* ---------- Chat ---------- */
   #chat-panel {
     position: absolute; bottom: 0; left: 0; right: 0;
@@ -257,6 +267,7 @@
       <div class="bars">
         <div class="bar-row">HP <div class="bar-bg"><div id="health-fill" class="bar-fill" style="width:100%"></div></div></div>
         <div class="bar-row">Голод <div class="bar-bg"><div id="hunger-fill" class="bar-fill" style="width:100%"></div></div></div>
+        <div id="hidden-badge" style="font-size:10px; color:#7ca87c; display:none;">🌳 вы укрыты от теней</div>
       </div>
       <div id="resources">
         🪵 <span id="wood-count">0</span> &nbsp; 🪨 <span id="stone-count">0</span> &nbsp; 🍖 <span id="meat-count">0</span>
@@ -284,6 +295,9 @@
 
     <div class="desktop-hint">WASD — движение | E — действие | I — инвентарь | Enter — чат</div>
 
+    <!-- Wave banner -->
+    <div id="wave-banner"></div>
+
     <!-- Inventory -->
     <div id="inventory-overlay" class="modal-overlay">
       <div class="modal-panel">
@@ -292,8 +306,9 @@
         <div class="inv-row"><div class="inv-label">🪨 Камень</div><div class="inv-count" id="inv-stone">0</div></div>
         <div class="inv-row"><div class="inv-label">🍖 Мясо</div><div class="inv-count" id="inv-meat">0</div></div>
         <div id="craft-section">
-          <div class="hint">Постройки</div>
+          <div class="hint">Постройки и снаряжение</div>
           <button id="craft-campfire-btn">🔥 Костёр (3 дерева)</button>
+          <button id="craft-spear-btn" class="menu-row-btn" style="margin-top:8px;">🗡️ Копьё (2 дерева, 1 камень)</button>
         </div>
       </div>
     </div>
@@ -334,6 +349,7 @@
       <div id="start-subtitle">готический выживач &middot; кооператив в реальном времени</div>
       <input id="start-name-input" type="text" maxlength="24" placeholder="Ваше имя (необязательно)">
       <button id="start-play-btn">Играть</button>
+      <div id="start-status" style="font-size:11px; color:#8c8275; min-height:16px; margin-top:10px;"></div>
       <div id="start-hint">
         Рубите деревья, добывайте камень, охотьтесь на кроликов. Стройте костёр — ночью тьма опасна. Находите других игроков на миникарте и общайтесь в чате.
       </div>
