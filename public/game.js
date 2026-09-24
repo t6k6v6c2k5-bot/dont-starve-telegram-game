@@ -24,7 +24,7 @@ function showFatalError(msg) {
 }
 
 // ==================== TELEGRAM INIT ====================
-console.log('[game.js] loaded, build: nocache-diag-v1');
+console.log('[game.js] loaded, build: tdz-fix-v1');
 let tgUser = null;
 try {
   if (window.Telegram && window.Telegram.WebApp) {
@@ -69,10 +69,22 @@ const myName = (tgUser && tgUser.name) || randomGuestName();
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 
+// Declared here (before resizeCanvas() is first called below) because
+// resizeCanvas() calls resizeNightCanvas() synchronously on load — having
+// this further down the file caused a "Cannot access before initialization"
+// crash that silently killed the entire script before any button listeners
+// (including Play) ever got registered.
+const nightCanvas = document.createElement('canvas');
+const nightCtx = nightCanvas.getContext('2d');
+function resizeNightCanvas() {
+  nightCanvas.width = canvas.width;
+  nightCanvas.height = canvas.height;
+}
+
 function resizeCanvas() {
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight;
-  if (typeof resizeNightCanvas === 'function') resizeNightCanvas();
+  resizeNightCanvas();
 }
 resizeCanvas();
 window.addEventListener('resize', resizeCanvas);
@@ -1357,13 +1369,7 @@ function drawCampfire(c) {
 }
 
 // ==================== DAY/NIGHT OVERLAY ====================
-const nightCanvas = document.createElement('canvas');
-const nightCtx = nightCanvas.getContext('2d');
-function resizeNightCanvas() {
-  nightCanvas.width = canvas.width;
-  nightCanvas.height = canvas.height;
-}
-resizeNightCanvas();
+// (nightCanvas/nightCtx/resizeNightCanvas are declared earlier, in CANVAS SETUP)
 
 const stars = [];
 for (let i = 0; i < 80; i++) {
