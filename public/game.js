@@ -257,11 +257,13 @@ const CHOP_RANGE = 90;
 function findNearestResource() {
   const self = players[selfId];
   if (!self) return null;
+  const px = predicted.x !== undefined ? predicted.x : self.x;
+  const py = predicted.y !== undefined ? predicted.y : self.y;
   let nearest = null;
   let nearestDist = Infinity;
   for (const id in resources) {
     const r = resources[id];
-    const d = Math.hypot(self.x - r.x, self.y - r.y);
+    const d = Math.hypot(px - r.x, py - r.y);
     if (d < CHOP_RANGE && d < nearestDist) {
       nearest = r;
       nearestDist = d;
@@ -284,18 +286,63 @@ function processInteraction() {
   interactPressed = false;
 }
 
+// ==================== CLIENT-SIDE PREDICTION (self only) ====================
+// Server is still authoritative (it validates/clamps everything), but waiting for a
+// full round-trip (input -> server tick -> broadcast) before moving the LOCAL
+// character is what causes the "stutter/teleport, feels like 1 FPS" symptom on a
+// real mobile network (Telegram WebView included) — every step of movement was
+// gated behind network latency. Predicting locally makes our own movement feel
+// instant; we softly reconcile toward the server's authoritative x/y to avoid drift.
+const PLAYER_SPEED_PX_PER_SEC = 120; // must match server: PLAYER_SPEED(4) * TICK_RATE(30)
+const predicted = { x: undefined, y: undefined };
+
+function updateSelfPrediction(dtSec) {
+  const self = players[selfId];
+  if (!self) return;
+  if (predicted.x === undefined) {
+    predicted.x = self.x;
+    predicted.y = self.y;
+  }
+
+  let dx = 0, dy = 0;
+  if (keyState.up) dy -= 1;
+  if (keyState.down) dy += 1;
+  if (keyState.left) dx -= 1;
+  if (keyState.right) dx += 1;
+  if (dx !== 0 && dy !== 0) { dx *= 0.7071; dy *= 0.7071; }
+
+  predicted.x += dx * PLAYER_SPEED_PX_PER_SEC * dtSec;
+  predicted.y += dy * PLAYER_SPEED_PX_PER_SEC * dtSec;
+  predicted.x = Math.max(20, Math.min(world.width - 20, predicted.x));
+  predicted.y = Math.max(20, Math.min(world.height - 20, predicted.y));
+
+  // Soft correction toward the server's authoritative position (fixes drift from
+  // packet loss / clock differences without causing a visible snap).
+  const pull = 1 - Math.exp(-4 * dtSec);
+  predicted.x += (self.x - predicted.x) * pull;
+  predicted.y += (self.y - predicted.y) * pull;
+}
+
 // ==================== CAMERA ====================
 const camera = { x: 0, y: 0 };
 
-// Smooths every player's visible position toward the latest server-authoritative
-// x/y. Without this, positions visibly snap every ~50ms (server broadcast rate)
-// instead of moving fluidly, which reads as stutter/glitching.
-function updateRenderPositions() {
+// Smooths OTHER players' visible position toward their latest server-authoritative
+// x/y (we have no input to predict them from). Frame-rate independent: the
+// convergence speed is based on real elapsed time (dtSec), not on how many
+// rendered frames happened — a fixed per-frame factor would look wrong on a
+// device/WebView that isn't rendering at a steady 60fps.
+function updateRenderPositions(dtSec) {
   for (const id in players) {
     const p = players[id];
+    if (id === selfId) {
+      p.renderX = predicted.x;
+      p.renderY = predicted.y;
+      continue;
+    }
     if (p.renderX === undefined) { p.renderX = p.x; p.renderY = p.y; }
-    p.renderX += (p.x - p.renderX) * 0.3;
-    p.renderY += (p.y - p.renderY) * 0.3;
+    const factor = 1 - Math.exp(-12 * dtSec);
+    p.renderX += (p.x - p.renderX) * factor;
+    p.renderY += (p.y - p.renderY) * factor;
   }
 }
 
@@ -516,9 +563,17 @@ function isOnScreen(x, y, margin) {
          y > camera.y - margin && y < camera.y + canvas.height + margin;
 }
 
-function gameLoop() {
+function gameLoop(timestamp) {
+  if (lastFrameTime === undefined) lastFrameTime = timestamp;
+  let dtSec = (timestamp - lastFrameTime) / 1000;
+  lastFrameTime = timestamp;
+  // Guard against huge gaps (tab was backgrounded/throttled, device hiccup) so a
+  // single stale frame doesn't cause a giant predicted-movement jump.
+  dtSec = Math.max(0, Math.min(dtSec, 0.1));
+
   processInteraction();
-  updateRenderPositions();
+  updateSelfPrediction(dtSec);
+  updateRenderPositions(dtSec);
   updateCamera();
   drawBackground();
 
@@ -545,4 +600,5 @@ function gameLoop() {
   requestAnimationFrame(gameLoop);
 }
 
-gameLoop();
+let lastFrameTime;
+requestAnimationFrame(gameLoop);
