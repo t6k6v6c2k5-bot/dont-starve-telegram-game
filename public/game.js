@@ -1,5 +1,30 @@
+// ==================== VISIBLE ERROR REPORTING ====================
+// If anything throws during setup, show it directly on screen — on a phone
+// there's usually no easy way to open devtools, so a silent crash otherwise
+// just looks like "I press Play and nothing happens" with no way to diagnose it.
+window.addEventListener('error', (e) => {
+  console.error('[game.js] uncaught error:', e.error || e.message);
+  showFatalError((e.error && e.error.message) || e.message || 'Неизвестная ошибка');
+});
+window.addEventListener('unhandledrejection', (e) => {
+  console.error('[game.js] unhandled rejection:', e.reason);
+  showFatalError((e.reason && e.reason.message) || String(e.reason) || 'Неизвестная ошибка');
+});
+function showFatalError(msg) {
+  let el = document.getElementById('fatal-error-box');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'fatal-error-box';
+    el.style.cssText = 'position:fixed;left:8px;right:8px;bottom:8px;z-index:9999;' +
+      'background:rgba(120,20,20,0.95);color:#fff;font:11px monospace;' +
+      'padding:10px;border-radius:6px;max-height:35vh;overflow:auto;white-space:pre-wrap;';
+    document.body.appendChild(el);
+  }
+  el.textContent = 'Ошибка скрипта: ' + msg;
+}
+
 // ==================== TELEGRAM INIT ====================
-console.log('[game.js] loaded, build: atmosphere-v1');
+console.log('[game.js] loaded, build: nocache-diag-v1');
 let tgUser = null;
 try {
   if (window.Telegram && window.Telegram.WebApp) {
