@@ -53,6 +53,9 @@ const campfires = {}; // campfireId -> campfire object
 function getDayTime() {
   return ((Date.now() - serverStartTime) % DAY_LENGTH_MS) / DAY_LENGTH_MS;
 }
+function getDayNumber() {
+  return Math.floor((Date.now() - serverStartTime) / DAY_LENGTH_MS) + 1;
+}
 function isNightNow() {
   return getDayTime() >= NIGHT_START;
 }
@@ -147,6 +150,7 @@ io.on('connection', (socket) => {
       isSitting: false,
       health: 100,
       hunger: 100,
+      deaths: 0,
       inventory: { wood: 0, stone: 0, meat: 0 },
       input: { up: false, down: false, left: false, right: false }
     };
@@ -158,6 +162,7 @@ io.on('connection', (socket) => {
       animals,
       campfires,
       dayTime: getDayTime(),
+      dayNumber: getDayNumber(),
       world: { width: WORLD_WIDTH, height: WORLD_HEIGHT }
     });
 
@@ -292,6 +297,20 @@ io.on('connection', (socket) => {
     p.isSitting = !p.isSitting;
   });
 
+  socket.on('chat', (text) => {
+    const p = players[socket.id];
+    if (!p || typeof text !== 'string') return;
+    const clean = text.trim().slice(0, 140);
+    if (!clean) return;
+
+    // Basic per-player rate limit so chat can't be used to flood the room.
+    const now = Date.now();
+    if (p._lastChatAt && now - p._lastChatAt < 600) return;
+    p._lastChatAt = now;
+
+    io.emit('chat', { id: socket.id, name: p.name, text: clean, t: now });
+  });
+
   socket.on('disconnect', () => {
     delete players[socket.id];
     io.emit('player_left', socket.id);
@@ -339,10 +358,35 @@ function tick() {
     } else if (p.isSitting && nearFire) {
       p.health = Math.min(100, p.health + CAMPFIRE_HEAL_RATE * DT);
     }
+
+    if (p.health <= 0) {
+      respawnPlayer(p, io.sockets.sockets.get(id));
+    }
   }
 
   animalTick();
   campfireTick();
+}
+
+function respawnPlayer(p, socket) {
+  const lostWood = Math.ceil((p.inventory.wood || 0) / 2);
+  const lostStone = Math.ceil((p.inventory.stone || 0) / 2);
+  const lostMeat = Math.ceil((p.inventory.meat || 0) / 2);
+  p.inventory.wood -= lostWood;
+  p.inventory.stone -= lostStone;
+  p.inventory.meat -= lostMeat;
+
+  p.health = 100;
+  p.hunger = 60;
+  p.isSitting = false;
+  p.deaths = (p.deaths || 0) + 1;
+  p.x = WORLD_WIDTH / 2 + randInt(-200, 200);
+  p.y = WORLD_HEIGHT / 2 + randInt(-200, 200);
+
+  if (socket) {
+    socket.emit('player_died', { deaths: p.deaths });
+    socket.emit('player_inventory', { id: p.id, inventory: p.inventory });
+  }
 }
 
 function campfireTick() {
@@ -421,7 +465,8 @@ function broadcastState() {
       isMoving: p.isMoving,
       isSitting: p.isSitting,
       health: p.health,
-      hunger: p.hunger
+      hunger: p.hunger,
+      deaths: p.deaths || 0
     };
   }
   const animalSnapshot = {};
@@ -439,6 +484,7 @@ function broadcastState() {
     animals: animalSnapshot,
     campfires: campfireSnapshot,
     dayTime: getDayTime(),
+    dayNumber: getDayNumber(),
     t: Date.now()
   });
 }
