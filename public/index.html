@@ -14,9 +14,12 @@
     font-family: 'Courier New', Courier, monospace;
     overflow: hidden;
     touch-action: none;
+    overscroll-behavior: none;
+    position: fixed;
+    -webkit-user-select: none;
   }
-  #game-container { position: relative; width: 100vw; height: 100vh; }
-  canvas { display: block; background: #1a1612; width: 100%; height: 100%; }
+  #game-container { position: relative; width: 100vw; height: 100vh; overscroll-behavior: none; touch-action: none; }
+  canvas { display: block; background: #1a1612; width: 100%; height: 100%; touch-action: none; }
 
   /* ---------- Top UI ---------- */
   #ui-top {
@@ -37,6 +40,8 @@
   #resources {
     background: rgba(0,0,0,0.45); border: 1px solid #4a3f30; border-radius: 6px;
     padding: 6px 10px; font-size: 12px; color: #d4af37; text-align: right;
+    pointer-events: auto;
+    cursor: pointer;
   }
 
   #players-list {
@@ -47,6 +52,13 @@
   }
   #players-list .title { color: #d4af37; margin-bottom: 4px; }
 
+  #clock-badge {
+    position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.45); border: 1px solid #4a3f30; border-radius: 20px;
+    padding: 4px 14px; font-size: 12px; color: #d4af37;
+    pointer-events: none; display: flex; align-items: center; gap: 6px;
+  }
+
   #action-hint {
     position: absolute; left: 50%; bottom: 130px; transform: translateX(-50%);
     background: rgba(0,0,0,0.6); border: 1px solid #d4af37; border-radius: 6px;
@@ -56,6 +68,21 @@
   }
   #action-hint.visible { display: block; }
   #action-hint:active { background: rgba(212,175,55,0.25); }
+
+  /* ---------- Campfire contextual panel ---------- */
+  #fire-panel {
+    position: absolute; left: 50%; bottom: 130px; transform: translateX(-50%);
+    display: none;
+    gap: 8px;
+  }
+  #fire-panel.visible { display: flex; }
+  #fire-panel button {
+    font-family: inherit; font-size: 12px; color: #e0d7c6;
+    background: rgba(0,0,0,0.65); border: 1px solid #d4af37; border-radius: 6px;
+    padding: 8px 12px;
+  }
+  #fire-panel button:active { background: rgba(212,175,55,0.25); }
+  #fire-panel button:disabled { opacity: 0.4; }
 
   /* ---------- Virtual Joystick ---------- */
   #joystick-zone {
@@ -84,10 +111,53 @@
   }
   #eat-btn:active { background: rgba(124,139,44,0.6); }
 
+  #sound-btn {
+    position: absolute; right: 24px; bottom: 110px;
+    width: 42px; height: 42px; border-radius: 50%;
+    background: rgba(0,0,0,0.45); border: 1px solid #4a3f30;
+    color: #d4af37; font-size: 16px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #sound-btn:active { background: rgba(212,175,55,0.25); }
+
   .desktop-hint {
     position: absolute; bottom: 6px; left: 50%; transform: translateX(-50%);
     font-size: 11px; color: #6b6255; pointer-events: none;
   }
+
+  /* ---------- Inventory panel ---------- */
+  #inventory-overlay {
+    position: absolute; inset: 0; background: rgba(0,0,0,0.55);
+    display: none; align-items: center; justify-content: center;
+    z-index: 20;
+  }
+  #inventory-overlay.visible { display: flex; }
+  #inventory-panel {
+    width: min(320px, 88vw);
+    background: #17130f; border: 2px solid #4a3f30; border-radius: 10px;
+    padding: 16px; color: #e0d7c6;
+  }
+  #inventory-panel h2 {
+    font-size: 14px; color: #d4af37; margin-bottom: 10px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  #inventory-panel .close-x { cursor: pointer; color: #8c8275; font-size: 16px; }
+  .inv-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 0; border-bottom: 1px solid #2b241c; font-size: 13px;
+  }
+  .inv-row:last-child { border-bottom: none; }
+  .inv-label { display: flex; align-items: center; gap: 8px; }
+  .inv-count { color: #d4af37; }
+  #craft-section { margin-top: 14px; }
+  #craft-section .hint { font-size: 11px; color: #8c8275; margin-bottom: 8px; }
+  #craft-campfire-btn {
+    width: 100%; font-family: inherit; font-size: 13px; color: #e0d7c6;
+    background: rgba(212,175,55,0.15); border: 1px solid #d4af37; border-radius: 6px;
+    padding: 10px;
+  }
+  #craft-campfire-btn:active { background: rgba(212,175,55,0.3); }
+  #craft-campfire-btn:disabled { opacity: 0.4; }
 
   @media (min-width: 768px) {
     #joystick-zone, #eat-btn { opacity: 0.35; }
@@ -104,9 +174,12 @@
         <div class="bar-row">Голод <div class="bar-bg"><div id="hunger-fill" class="bar-fill" style="width:100%"></div></div></div>
       </div>
       <div id="resources">
-        🪵 <span id="wood-count">0</span> &nbsp; 🪨 <span id="stone-count">0</span>
+        🪵 <span id="wood-count">0</span> &nbsp; 🪨 <span id="stone-count">0</span> &nbsp; 🍖 <span id="meat-count">0</span>
+        <div style="font-size:9px; color:#8c8275; margin-top:2px;">тап — инвентарь</div>
       </div>
     </div>
+
+    <div id="clock-badge"><span id="clock-icon">☀️</span><span id="clock-text">День</span></div>
 
     <div id="players-list">
       <div class="title">Онлайн</div>
@@ -115,13 +188,41 @@
 
     <div id="action-hint">Рубить</div>
 
+    <div id="fire-panel">
+      <button id="sit-btn">Сесть</button>
+      <button id="feed-btn">Подкинуть дров</button>
+    </div>
+
     <div id="joystick-zone">
       <div id="joystick-stick"></div>
     </div>
 
-    <div id="eat-btn">Есть<br>(дерево)</div>
+    <div id="eat-btn">Есть</div>
+    <div id="sound-btn">🔊</div>
 
-    <div class="desktop-hint">WASD / Стрелки — движение &nbsp;|&nbsp; E — взаимодействие</div>
+    <div class="desktop-hint">WASD — движение | E — взаимодействие | I — инвентарь</div>
+
+    <div id="inventory-overlay">
+      <div id="inventory-panel">
+        <h2>Инвентарь <span class="close-x" id="inventory-close">✕</span></h2>
+        <div class="inv-row">
+          <div class="inv-label">🪵 Дерево</div>
+          <div class="inv-count" id="inv-wood">0</div>
+        </div>
+        <div class="inv-row">
+          <div class="inv-label">🪨 Камень</div>
+          <div class="inv-count" id="inv-stone">0</div>
+        </div>
+        <div class="inv-row">
+          <div class="inv-label">🍖 Мясо</div>
+          <div class="inv-count" id="inv-meat">0</div>
+        </div>
+        <div id="craft-section">
+          <div class="hint">Постройки</div>
+          <button id="craft-campfire-btn">🔥 Костёр (3 дерева)</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="/socket.io/socket.io.js"></script>
