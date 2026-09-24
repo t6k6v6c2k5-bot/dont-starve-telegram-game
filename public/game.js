@@ -1,4 +1,5 @@
 // ==================== TELEGRAM INIT ====================
+console.log('[game.js] loaded, build: client-prediction-v1');
 let tgUser = null;
 try {
   if (window.Telegram && window.Telegram.WebApp) {
