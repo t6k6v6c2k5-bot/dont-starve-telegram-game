@@ -45,10 +45,23 @@ const CAMPFIRE_INTERACT_RANGE = 110;
 const NIGHT_EXPOSURE_DAMAGE = 0.05; // extra health/sec lost if out in the dark, unlit
 const CAMPFIRE_HEAL_RATE = 0.6;     // health/sec regen while sitting at a lit fire
 
+// Monsters / night waves
+const MONSTER_BASE_HP = 3;
+const MONSTER_SPEED = 70;          // px/sec
+const MONSTER_DAMAGE = 3;          // health/sec while attacking a player
+const MONSTER_ATTACK_RANGE = 32;
+const MONSTER_CAMPFIRE_DAMAGE = 5; // fuel/sec drained while attacking a campfire
+const MONSTER_TARGET_RANGE = 550;  // how far a monster can "sense" a target
+const HIDE_RADIUS = 45;            // standing this close to a tree hides you from monsters
+const ATTACK_RANGE = 90;
+const SPEAR_COST_WOOD = 2;
+const SPEAR_COST_STONE = 1;
+
 const players = {};   // socketId -> player object
 const resources = {}; // resourceId -> resource object
 const animals = {};   // animalId -> animal object
 const campfires = {}; // campfireId -> campfire object
+const monsters = {};  // monsterId -> monster object
 
 function getDayTime() {
   return ((Date.now() - serverStartTime) % DAY_LENGTH_MS) / DAY_LENGTH_MS;
@@ -64,6 +77,14 @@ function isNearLitCampfire(x, y, radius) {
   for (const id in campfires) {
     const c = campfires[id];
     if (c.lit && Math.hypot(c.x - x, c.y - y) <= (radius !== undefined ? radius : c.radius)) return true;
+  }
+  return false;
+}
+
+function isPlayerHidden(p) {
+  for (const id in resources) {
+    const r = resources[id];
+    if (r.type === 'tree' && Math.hypot(r.x - p.x, r.y - p.y) < HIDE_RADIUS) return true;
   }
   return false;
 }
@@ -125,6 +146,51 @@ function makeAnimal(x, y) {
   };
 }
 
+function makeMonster(x, y, hpBonus) {
+  const hp = MONSTER_BASE_HP + hpBonus;
+  return {
+    id: 'mon_' + Math.random().toString(36).slice(2, 10),
+    x, y,
+    hp, maxHp: hp,
+    vx: 0, vy: 0,
+    facingRight: true,
+    attacking: false
+  };
+}
+
+function spawnMonsterAtEdge() {
+  const day = getDayNumber();
+  const anyPlayer = Object.values(players)[0];
+  let x, y;
+  if (anyPlayer) {
+    const angle = Math.random() * Math.PI * 2;
+    const dist = 500 + Math.random() * 400;
+    x = Math.max(20, Math.min(WORLD_WIDTH - 20, anyPlayer.x + Math.cos(angle) * dist));
+    y = Math.max(20, Math.min(WORLD_HEIGHT - 20, anyPlayer.y + Math.sin(angle) * dist));
+  } else {
+    x = Math.random() * WORLD_WIDTH;
+    y = Math.random() * WORLD_HEIGHT;
+  }
+  const hpBonus = Math.floor(day / 3);
+  const m = makeMonster(x, y, hpBonus);
+  monsters[m.id] = m;
+  io.emit('monster_added', m);
+}
+
+let waveActive = false;
+function startWave() {
+  const day = getDayNumber();
+  const count = Math.min(3 + day, 18);
+  for (let i = 0; i < count; i++) spawnMonsterAtEdge();
+  waveActive = true;
+  io.emit('night_wave_start', { day, count });
+}
+function endWave() {
+  for (const id in monsters) delete monsters[id];
+  waveActive = false;
+  io.emit('wave_end', {});
+}
+
 const ADJ = ['Тёмный', 'Тихий', 'Мрачный', 'Дикий', 'Забытый', 'Ночной', 'Одинокий', 'Голодный'];
 const NOUN = ['Странник', 'Скиталец', 'Охотник', 'Тень', 'Отшельник', 'Бродяга', 'Изгой'];
 function randomName() {
@@ -151,6 +217,7 @@ io.on('connection', (socket) => {
       health: 100,
       hunger: 100,
       deaths: 0,
+      hasSpear: false,
       inventory: { wood: 0, stone: 0, meat: 0 },
       input: { up: false, down: false, left: false, right: false }
     };
@@ -161,6 +228,7 @@ io.on('connection', (socket) => {
       resources,
       animals,
       campfires,
+      monsters,
       dayTime: getDayTime(),
       dayNumber: getDayNumber(),
       world: { width: WORLD_WIDTH, height: WORLD_HEIGHT }
@@ -311,6 +379,35 @@ io.on('connection', (socket) => {
     io.emit('chat', { id: socket.id, name: p.name, text: clean, t: now });
   });
 
+  socket.on('craft_spear', () => {
+    const p = players[socket.id];
+    if (!p || p.hasSpear) return;
+    if ((p.inventory.wood || 0) < SPEAR_COST_WOOD || (p.inventory.stone || 0) < SPEAR_COST_STONE) return;
+    p.inventory.wood -= SPEAR_COST_WOOD;
+    p.inventory.stone -= SPEAR_COST_STONE;
+    p.hasSpear = true;
+    socket.emit('player_inventory', { id: socket.id, inventory: p.inventory });
+    socket.emit('spear_crafted', {});
+  });
+
+  socket.on('attack_monster', (monsterId) => {
+    const p = players[socket.id];
+    const m = monsters[monsterId];
+    if (!p || !m) return;
+
+    const dist = Math.hypot(p.x - m.x, p.y - m.y);
+    if (dist > ATTACK_RANGE) return;
+
+    m.hp -= p.hasSpear ? 2 : 1;
+
+    if (m.hp <= 0) {
+      delete monsters[monsterId];
+      io.emit('monster_removed', monsterId);
+    } else {
+      io.emit('monster_damaged', { id: monsterId, hp: m.hp });
+    }
+  });
+
   socket.on('disconnect', () => {
     delete players[socket.id];
     io.emit('player_left', socket.id);
@@ -319,8 +416,12 @@ io.on('connection', (socket) => {
 });
 
 // ==================== GAME LOOP ====================
+let wasNight = false;
 function tick() {
   const night = isNightNow();
+  if (night && !wasNight) startWave();
+  if (!night && wasNight) endWave();
+  wasNight = night;
 
   for (const id in players) {
     const p = players[id];
@@ -366,6 +467,60 @@ function tick() {
 
   animalTick();
   campfireTick();
+  monsterTick();
+}
+
+function monsterTick() {
+  if (!isNightNow()) return;
+
+  for (const id in monsters) {
+    const m = monsters[id];
+
+    let target = null, targetType = null, bestDist = Infinity;
+    for (const pid in players) {
+      const p = players[pid];
+      if (isPlayerHidden(p)) continue; // hiding near a tree keeps you off the monster's radar
+      const d = Math.hypot(p.x - m.x, p.y - m.y);
+      if (d < MONSTER_TARGET_RANGE && d < bestDist) { bestDist = d; target = p; targetType = 'player'; }
+    }
+    if (!target) {
+      for (const cid in campfires) {
+        const c = campfires[cid];
+        if (!c.lit) continue;
+        const d = Math.hypot(c.x - m.x, c.y - m.y);
+        if (d < bestDist) { bestDist = d; target = c; targetType = 'campfire'; }
+      }
+    }
+
+    if (target) {
+      const dx = target.x - m.x, dy = target.y - m.y;
+      const mag = Math.hypot(dx, dy) || 1;
+      if (mag > MONSTER_ATTACK_RANGE) {
+        m.vx = (dx / mag) * MONSTER_SPEED;
+        m.vy = (dy / mag) * MONSTER_SPEED;
+        m.x += m.vx * DT;
+        m.y += m.vy * DT;
+        m.attacking = false;
+      } else {
+        m.vx = 0; m.vy = 0;
+        m.attacking = true;
+        if (targetType === 'player') {
+          target.health = Math.max(0, target.health - MONSTER_DAMAGE * DT);
+          if (target.health <= 0) respawnPlayer(target, io.sockets.sockets.get(target.id));
+        } else {
+          target.fuel = Math.max(0, target.fuel - MONSTER_CAMPFIRE_DAMAGE * DT);
+          if (target.fuel <= 0) target.lit = false;
+        }
+      }
+      if (m.vx > 0.5) m.facingRight = true;
+      else if (m.vx < -0.5) m.facingRight = false;
+    } else {
+      m.attacking = false;
+    }
+
+    m.x = Math.max(20, Math.min(WORLD_WIDTH - 20, m.x));
+    m.y = Math.max(20, Math.min(WORLD_HEIGHT - 20, m.y));
+  }
 }
 
 function respawnPlayer(p, socket) {
@@ -466,7 +621,8 @@ function broadcastState() {
       isSitting: p.isSitting,
       health: p.health,
       hunger: p.hunger,
-      deaths: p.deaths || 0
+      deaths: p.deaths || 0,
+      hasSpear: !!p.hasSpear
     };
   }
   const animalSnapshot = {};
@@ -479,10 +635,16 @@ function broadcastState() {
     const c = campfires[id];
     campfireSnapshot[id] = { id: c.id, x: c.x, y: c.y, fuel: c.fuel, lit: c.lit };
   }
+  const monsterSnapshot = {};
+  for (const id in monsters) {
+    const m = monsters[id];
+    monsterSnapshot[id] = { id: m.id, x: m.x, y: m.y, facingRight: m.facingRight, attacking: m.attacking, hp: m.hp, maxHp: m.maxHp };
+  }
   io.emit('state', {
     players: snapshot,
     animals: animalSnapshot,
     campfires: campfireSnapshot,
+    monsters: monsterSnapshot,
     dayTime: getDayTime(),
     dayNumber: getDayNumber(),
     t: Date.now()
