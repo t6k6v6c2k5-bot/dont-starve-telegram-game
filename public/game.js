@@ -47,6 +47,7 @@ const ctx = canvas.getContext('2d');
 function resizeCanvas() {
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight;
+  if (typeof resizeNightCanvas === 'function') resizeNightCanvas();
 }
 resizeCanvas();
 window.addEventListener('resize', resizeCanvas);
@@ -61,13 +62,20 @@ let resources = {};  // resourceId -> {id, type, x, y, size, hp, maxHp}
 let animals = {};    // animalId -> {id, type, x, y, hp, maxHp, facingRight, fleeing}
 let campfires = {};  // campfireId -> {id, x, y, fuel, radius, lit}
 let dayTime = 0.2;   // 0..1 fraction of the day/night cycle (server-authoritative)
+let dayNumber = 1;
 let inventory = { wood: 0, stone: 0, meat: 0 };
 let health = 100, hunger = 100;
+let hasJoined = false;
 const particles = []; // short-lived hit/chop effect particles
 
-socket.on('connect', () => {
-  socket.emit('join', { userId: myUserId, name: myName });
-});
+// Joining happens when the player presses "Играть" on the start menu (see
+// START MENU section below), not automatically on connect — this also gives
+// us the required user gesture to unlock audio.
+function joinGame(name) {
+  if (hasJoined) return;
+  hasJoined = true;
+  socket.emit('join', { userId: myUserId, name: name || myName });
+}
 
 function initRenderPos(p) {
   // renderX/renderY are the smoothed on-screen position; x/y stay server-authoritative.
@@ -83,6 +91,7 @@ socket.on('init', (data) => {
   animals = data.animals || {};
   campfires = data.campfires || {};
   dayTime = typeof data.dayTime === 'number' ? data.dayTime : dayTime;
+  dayNumber = typeof data.dayNumber === 'number' ? data.dayNumber : dayNumber;
   Object.values(players).forEach(initRenderPos);
   Object.values(animals).forEach(initRenderPos);
   const self = players[selfId];
@@ -151,11 +160,23 @@ socket.on('state', (data) => {
   }
 
   if (typeof data.dayTime === 'number') dayTime = data.dayTime;
+  if (typeof data.dayNumber === 'number') dayNumber = data.dayNumber;
 
   updatePlayersListUI();
 });
 
 socket.on('campfire_added', (c) => { campfires[c.id] = c; playIgniteSound(); });
+
+socket.on('player_died', () => {
+  showDeathOverlay();
+});
+
+socket.on('chat', (msg) => {
+  appendChatMessage(msg);
+  if (players[msg.id]) {
+    players[msg.id]._chatBubble = { text: msg.text, until: performance.now() + 4500 };
+  }
+});
 
 socket.on('resource_removed', (id) => {
   const r = resources[id];
@@ -322,6 +343,7 @@ function playBlip(freqStart, freqEnd, durationSec, type) {
 }
 
 function playHitSound() { playBlip(220, 90, 0.12, 'square'); }
+function playDeathSound() { playBlip(160, 40, 0.5, 'sawtooth'); }
 
 function playIgniteSound() {
   if (!audioCtx || !soundEnabled) return;
@@ -345,15 +367,21 @@ window.addEventListener('pointerdown', ensureAudio, { once: true });
 window.addEventListener('keydown', ensureAudio, { once: true });
 
 const soundBtnEl = document.getElementById('sound-btn');
-soundBtnEl.addEventListener('pointerdown', (e) => {
-  e.preventDefault();
+function toggleSound() {
   ensureAudio();
   soundEnabled = !soundEnabled;
-  soundBtnEl.textContent = soundEnabled ? '🔊' : '🔇';
+  const label = soundEnabled ? '🔊' : '🔇';
+  soundBtnEl.textContent = label;
+  const menuBtn = document.getElementById('menu-sound-btn');
+  if (menuBtn) menuBtn.textContent = `${label} Звук: ${soundEnabled ? 'вкл' : 'выкл'}`;
   if (audioCtx && !soundEnabled) {
     ambientGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.2);
     fireGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.2);
   }
+}
+soundBtnEl.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  toggleSound();
 });
 
 // ==================== UI HELPERS ====================
@@ -362,8 +390,9 @@ const hungerFillEl = document.getElementById('hunger-fill');
 const woodCountEl = document.getElementById('wood-count');
 const stoneCountEl = document.getElementById('stone-count');
 const meatCountEl = document.getElementById('meat-count');
-const playersListBodyEl = document.getElementById('players-list-body');
+const menuPlayersBodyEl = document.getElementById('menu-players-body');
 const actionHintEl = document.getElementById('action-hint');
+const dayNumberEl = document.getElementById('day-number');
 
 function updateBarsUI() {
   healthFillEl.style.width = Math.max(0, Math.min(100, health)) + '%';
@@ -381,8 +410,12 @@ function updateResourceUI() {
 }
 
 function updatePlayersListUI() {
-  const names = Object.values(players).map(p => p.name || '???');
-  playersListBodyEl.innerHTML = names.map(n => `<div>• ${escapeHtml(n)}</div>`).join('') || '<div>—</div>';
+  if (!menuPlayersBodyEl) return;
+  const names = Object.values(players).map(p => {
+    const deaths = p.deaths ? ` (погибал: ${p.deaths})` : '';
+    return (p.name || '???') + deaths;
+  });
+  menuPlayersBodyEl.innerHTML = names.map(n => `<div>• ${escapeHtml(n)}</div>`).join('') || '<div>—</div>';
 }
 
 function escapeHtml(str) {
@@ -470,12 +503,196 @@ feedBtnEl.addEventListener('pointerdown', (e) => {
 // ==================== CLOCK BADGE ====================
 const clockIconEl = document.getElementById('clock-icon');
 const clockTextEl = document.getElementById('clock-text');
+let lastClockLabel = '';
 function updateClockUI() {
-  const night = dayTime >= 0.65 || dayTime < 0.02;
-  if (dayTime < 0.08) { clockIconEl.textContent = '🌅'; clockTextEl.textContent = 'Рассвет'; }
-  else if (dayTime < 0.55) { clockIconEl.textContent = '☀️'; clockTextEl.textContent = 'День'; }
-  else if (dayTime < 0.65) { clockIconEl.textContent = '🌇'; clockTextEl.textContent = 'Закат'; }
-  else { clockIconEl.textContent = '🌙'; clockTextEl.textContent = 'Ночь'; }
+  let icon, text;
+  if (dayTime < 0.08) { icon = '🌅'; text = 'Рассвет'; }
+  else if (dayTime < 0.55) { icon = '☀️'; text = 'День'; }
+  else if (dayTime < 0.65) { icon = '🌇'; text = 'Закат'; }
+  else { icon = '🌙'; text = 'Ночь'; }
+  if (text !== lastClockLabel) {
+    clockIconEl.textContent = icon;
+    clockTextEl.textContent = text;
+    lastClockLabel = text;
+  }
+  if (dayNumberEl) dayNumberEl.textContent = `· День ${dayNumber}`;
+}
+
+// ==================== START MENU ====================
+const startOverlayEl = document.getElementById('start-overlay');
+const startNameInput = document.getElementById('start-name-input');
+const startPlayBtn = document.getElementById('start-play-btn');
+
+if (tgUser && tgUser.name) {
+  startNameInput.value = tgUser.name;
+  startNameInput.disabled = true; // Telegram identity is already known
+} else {
+  startNameInput.value = myName;
+}
+
+function startGame() {
+  ensureAudio();
+  const chosenName = startNameInput.value.trim().slice(0, 24) || myName;
+  joinGame(chosenName);
+  startOverlayEl.classList.add('hidden');
+}
+
+startPlayBtn.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  startGame();
+});
+startNameInput.addEventListener('keydown', (e) => {
+  e.stopPropagation();
+  if (e.code === 'Enter') startGame();
+});
+
+// ==================== DEATH OVERLAY ====================
+const deathOverlayEl = document.getElementById('death-overlay');
+let deathHideTimer = null;
+function showDeathOverlay() {
+  deathOverlayEl.classList.add('visible');
+  playDeathSound();
+  clearTimeout(deathHideTimer);
+  deathHideTimer = setTimeout(() => deathOverlayEl.classList.remove('visible'), 2200);
+}
+
+// ==================== PAUSE / MENU PANEL ====================
+const menuOverlayEl = document.getElementById('menu-overlay');
+const menuBtnEl = document.getElementById('menu-btn');
+const menuCloseEl = document.getElementById('menu-close');
+const menuSoundBtnEl = document.getElementById('menu-sound-btn');
+const menuLocateBtnEl = document.getElementById('menu-locate-btn');
+
+menuBtnEl.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  menuOverlayEl.classList.add('visible');
+  updatePlayersListUI();
+});
+menuCloseEl.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  menuOverlayEl.classList.remove('visible');
+});
+menuOverlayEl.addEventListener('pointerdown', (e) => {
+  if (e.target === menuOverlayEl) menuOverlayEl.classList.remove('visible');
+});
+menuSoundBtnEl.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  toggleSound();
+});
+
+// Locate & briefly highlight the nearest other player, both as a toast and a
+// pulsing dot on the minimap — this is the "find each other" tool.
+let locateBeacon = null; // { id, until }
+menuLocateBtnEl.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  const self = players[selfId];
+  if (!self) return;
+  let nearest = null, nearestDist = Infinity;
+  for (const id in players) {
+    if (id === selfId) continue;
+    const p = players[id];
+    const d = Math.hypot(p.x - self.x, p.y - self.y);
+    if (d < nearestDist) { nearestDist = d; nearest = p; }
+  }
+  if (!nearest) {
+    menuLocateBtnEl.textContent = '🧭 Больше никого нет рядом';
+  } else {
+    menuLocateBtnEl.textContent = `🧭 ${nearest.name}, ~${Math.round(nearestDist)}м`;
+    locateBeacon = { id: nearest.id, until: performance.now() + 4000 };
+  }
+  setTimeout(() => { menuLocateBtnEl.textContent = '🧭 Найти ближайшего игрока'; }, 3000);
+});
+
+// ==================== CHAT ====================
+const chatPanelEl = document.getElementById('chat-panel');
+const chatLogEl = document.getElementById('chat-log');
+const chatInputEl = document.getElementById('chat-input');
+const chatSendBtnEl = document.getElementById('chat-send-btn');
+const chatToggleBtnEl = document.getElementById('chat-toggle-btn');
+
+function toggleChat() {
+  chatPanelEl.classList.toggle('visible');
+  if (chatPanelEl.classList.contains('visible')) chatInputEl.focus();
+}
+chatToggleBtnEl.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  toggleChat();
+});
+
+function appendChatMessage(msg) {
+  const row = document.createElement('div');
+  row.className = 'msg';
+  const who = document.createElement('span');
+  who.className = 'who';
+  who.textContent = (msg.id === selfId ? 'Вы' : msg.name) + ': ';
+  row.appendChild(who);
+  row.appendChild(document.createTextNode(msg.text));
+  chatLogEl.appendChild(row);
+  while (chatLogEl.children.length > 60) chatLogEl.removeChild(chatLogEl.firstChild);
+  chatLogEl.scrollTop = chatLogEl.scrollHeight;
+}
+
+function sendChat() {
+  const text = chatInputEl.value.trim();
+  if (!text) return;
+  socket.emit('chat', text);
+  chatInputEl.value = '';
+}
+chatSendBtnEl.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  sendChat();
+});
+chatInputEl.addEventListener('keydown', (e) => {
+  if (e.code === 'Enter') { e.preventDefault(); sendChat(); }
+  e.stopPropagation(); // don't let WASD-style keys leak into movement while typing
+});
+
+// ==================== MINIMAP ====================
+const minimapEl = document.getElementById('minimap');
+const minimapCtx = minimapEl.getContext('2d');
+function drawMinimap() {
+  const w = minimapEl.width, h = minimapEl.height;
+  minimapCtx.clearRect(0, 0, w, h);
+  minimapCtx.fillStyle = 'rgba(20,17,13,0.9)';
+  minimapCtx.fillRect(0, 0, w, h);
+
+  const sx = w / world.width, sy = h / world.height;
+
+  // campfires as small orange dots
+  for (const id in campfires) {
+    const c = campfires[id];
+    minimapCtx.fillStyle = c.lit ? '#ff8a3d' : '#4a4640';
+    minimapCtx.beginPath();
+    minimapCtx.arc(c.x * sx, c.y * sy, 2, 0, Math.PI * 2);
+    minimapCtx.fill();
+  }
+
+  const now = performance.now();
+  for (const id in players) {
+    const p = players[id];
+    const isSelf = id === selfId;
+    const isBeacon = locateBeacon && locateBeacon.id === id && now < locateBeacon.until;
+    const mx = p.x * sx, my = p.y * sy;
+
+    if (isBeacon) {
+      const pulse = 4 + Math.sin(now * 0.02) * 2;
+      minimapCtx.strokeStyle = '#ff4d4d';
+      minimapCtx.lineWidth = 1.5;
+      minimapCtx.beginPath();
+      minimapCtx.arc(mx, my, 6 + pulse, 0, Math.PI * 2);
+      minimapCtx.stroke();
+    }
+
+    minimapCtx.fillStyle = isSelf ? '#d4af37' : '#e0d7c6';
+    minimapCtx.beginPath();
+    minimapCtx.arc(mx, my, isSelf ? 3 : 2.2, 0, Math.PI * 2);
+    minimapCtx.fill();
+  }
+
+  // viewport rectangle
+  minimapCtx.strokeStyle = 'rgba(212,175,55,0.5)';
+  minimapCtx.lineWidth = 1;
+  minimapCtx.strokeRect(camera.x * sx, camera.y * sy, canvas.width * sx, canvas.height * sy);
 }
 
 // ==================== INPUT: KEYBOARD ====================
@@ -640,6 +857,7 @@ function triggerSwing(targetX, targetY) {
   self._swingUntil = performance.now() + 260;
   const px = predicted.x !== undefined ? predicted.x : self.x;
   self.facingRight = targetX >= px;
+  playHitSound();
 }
 
 // ==================== CLIENT-SIDE PREDICTION (self only) ====================
@@ -720,6 +938,11 @@ function updateCamera(dtSec) {
 }
 
 // ==================== RENDERING HELPERS ====================
+function hashXY(x, y) {
+  const h = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
+  return h - Math.floor(h);
+}
+
 function drawBackground() {
   ctx.fillStyle = '#1c1713';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -734,14 +957,78 @@ function drawBackground() {
     for (let j = startY; j < camera.y + canvas.height + 60; j += 60) {
       const sx = i - camera.x;
       const sy = j - camera.y;
-      ctx.beginPath();
-      ctx.moveTo(sx, sy);
-      ctx.lineTo(sx + 4, sy - 8);
-      ctx.moveTo(sx + 3, sy);
-      ctx.lineTo(sx + 8, sy - 6);
-      ctx.stroke();
+      const h = hashXY(i, j);
+
+      if (h < 0.06) {
+        // tiny flower cluster
+        const petalColor = h < 0.02 ? '#8a7a3a' : (h < 0.04 ? '#7a3a3a' : '#5a5a7a');
+        ctx.fillStyle = petalColor;
+        for (let k = 0; k < 3; k++) {
+          const ang = (k / 3) * Math.PI * 2;
+          ctx.beginPath();
+          ctx.arc(sx + Math.cos(ang) * 3, sy + Math.sin(ang) * 3, 1.6, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.fillStyle = '#3a2a1a';
+        ctx.beginPath();
+        ctx.arc(sx, sy, 1.2, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (h < 0.13) {
+        // small pebble
+        ctx.fillStyle = '#332b22';
+        ctx.beginPath();
+        ctx.ellipse(sx, sy, 3, 2, 0, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        // default grass hatching
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.lineTo(sx + 4, sy - 8);
+        ctx.moveTo(sx + 3, sy);
+        ctx.lineTo(sx + 8, sy - 6);
+        ctx.stroke();
+      }
     }
   }
+}
+
+// ==================== FIREFLIES (night-only atmosphere) ====================
+const fireflies = [];
+for (let i = 0; i < 40; i++) {
+  fireflies.push({
+    ox: (Math.random() - 0.5) * 2600,
+    oy: (Math.random() - 0.5) * 2600,
+    phase: Math.random() * Math.PI * 2,
+    speed: 0.3 + Math.random() * 0.5,
+    radius: 20 + Math.random() * 40
+  });
+}
+
+function drawFireflies(nightAlpha) {
+  if (nightAlpha < 0.15) return;
+  const self = players[selfId];
+  const centerX = self ? self.renderX : camera.x + canvas.width / 2;
+  const centerY = self ? self.renderY : camera.y + canvas.height / 2;
+  const now = performance.now() * 0.001;
+
+  ctx.save();
+  for (const f of fireflies) {
+    const wx = centerX + f.ox + Math.cos(now * f.speed + f.phase) * f.radius;
+    const wy = centerY + f.oy + Math.sin(now * f.speed * 0.8 + f.phase) * f.radius;
+    const sx = wx - camera.x, sy = wy - camera.y;
+    if (sx < -20 || sx > canvas.width + 20 || sy < -20 || sy > canvas.height + 20) continue;
+
+    const twinkle = 0.4 + 0.6 * Math.abs(Math.sin(now * 2 + f.phase * 3));
+    const alpha = Math.min(1, (nightAlpha - 0.1) / 0.7) * twinkle;
+    const grad = ctx.createRadialGradient(sx, sy, 0, sx, sy, 8);
+    grad.addColorStop(0, `rgba(200,255,140,${alpha})`);
+    grad.addColorStop(1, 'rgba(200,255,140,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(sx, sy, 8, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
 }
 
 function drawTree(r) {
@@ -810,6 +1097,183 @@ function drawRock(r) {
   ctx.fill();
   ctx.stroke();
 
+  ctx.restore();
+}
+
+function drawCampfire(c) {
+  const sx = c.x - camera.x;
+  const sy = c.y - camera.y;
+  ctx.save();
+  ctx.translate(sx, sy);
+
+  if (c.lit) {
+    const glowR = 75;
+    const grad = ctx.createRadialGradient(0, -6, 4, 0, -6, glowR);
+    grad.addColorStop(0, 'rgba(255,170,60,0.35)');
+    grad.addColorStop(1, 'rgba(255,170,60,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(0, -6, glowR, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // shadow
+  ctx.beginPath();
+  ctx.ellipse(0, 4, 20, 7, 0, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  ctx.fill();
+
+  // crossed logs
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = '#3a2a1a';
+  ctx.lineWidth = 6;
+  ctx.beginPath();
+  ctx.moveTo(-15, 6);
+  ctx.lineTo(11, -7);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(15, 6);
+  ctx.lineTo(-11, -7);
+  ctx.stroke();
+  ctx.strokeStyle = '#1c140d';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(-15, 6);
+  ctx.lineTo(11, -7);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(15, 6);
+  ctx.lineTo(-11, -7);
+  ctx.stroke();
+
+  if (c.lit) {
+    const now = performance.now();
+    const flicker = Math.sin(now * 0.02) * 2 + Math.sin(now * 0.037) * 1.5;
+    ctx.fillStyle = '#ffcf5c';
+    ctx.beginPath();
+    ctx.moveTo(0, -6);
+    ctx.quadraticCurveTo(9 + flicker, -18, 0, -34 + flicker);
+    ctx.quadraticCurveTo(-9 - flicker, -18, 0, -6);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = '#ff8a3d';
+    ctx.beginPath();
+    ctx.moveTo(0, -6);
+    ctx.quadraticCurveTo(5 + flicker * 0.6, -14, 0, -24 + flicker * 0.6);
+    ctx.quadraticCurveTo(-5 - flicker * 0.6, -14, 0, -6);
+    ctx.closePath();
+    ctx.fill();
+  } else {
+    ctx.fillStyle = '#4a4640';
+    ctx.beginPath();
+    ctx.ellipse(0, -3, 10, 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore();
+
+  // low-fuel warning ring so players know to feed it before it dies out
+  if (c.lit && c.fuel < 25) {
+    ctx.save();
+    ctx.globalAlpha = 0.5 + Math.sin(performance.now() * 0.01) * 0.3;
+    ctx.strokeStyle = '#ff6b4a';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(sx, sy - 6, 26, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+// ==================== DAY/NIGHT OVERLAY ====================
+const nightCanvas = document.createElement('canvas');
+const nightCtx = nightCanvas.getContext('2d');
+function resizeNightCanvas() {
+  nightCanvas.width = canvas.width;
+  nightCanvas.height = canvas.height;
+}
+resizeNightCanvas();
+
+const stars = [];
+for (let i = 0; i < 80; i++) {
+  stars.push({ x: Math.random(), y: Math.random(), phase: Math.random() * Math.PI * 2, speed: 0.4 + Math.random() * 1.4 });
+}
+
+function computeNightAlpha(t) {
+  const MAX_ALPHA = 0.8;
+  if (t < 0.08) return MAX_ALPHA * (1 - t / 0.08);         // dawn: fading out
+  if (t < 0.55) return 0;                                   // day
+  if (t < 0.65) return MAX_ALPHA * ((t - 0.55) / 0.10);     // dusk: fading in
+  return MAX_ALPHA;                                          // night
+}
+
+function drawNightOverlay(nightAlpha) {
+  if (nightAlpha <= 0.01) return;
+
+  nightCtx.clearRect(0, 0, nightCanvas.width, nightCanvas.height);
+  nightCtx.fillStyle = `rgba(6,8,20,${nightAlpha})`;
+  nightCtx.fillRect(0, 0, nightCanvas.width, nightCanvas.height);
+
+  nightCtx.globalCompositeOperation = 'destination-out';
+
+  // Faint personal glow so you're never fully blind, even without a fire —
+  // our own small twist on Don't Starve's harsher "the dark WILL get you".
+  const self = players[selfId];
+  if (self) {
+    const sx = self.renderX - camera.x;
+    const sy = self.renderY - camera.y;
+    const grad = nightCtx.createRadialGradient(sx, sy, 0, sx, sy, 70);
+    grad.addColorStop(0, 'rgba(0,0,0,0.5)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    nightCtx.fillStyle = grad;
+    nightCtx.beginPath();
+    nightCtx.arc(sx, sy, 70, 0, Math.PI * 2);
+    nightCtx.fill();
+  }
+
+  for (const id in campfires) {
+    const c = campfires[id];
+    if (!c.lit) continue;
+    const sx = c.x - camera.x;
+    const sy = c.y - camera.y;
+    const r = c.radius || 220;
+    const grad = nightCtx.createRadialGradient(sx, sy - 10, 0, sx, sy - 10, r);
+    grad.addColorStop(0, 'rgba(0,0,0,1)');
+    grad.addColorStop(0.6, 'rgba(0,0,0,0.7)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    nightCtx.fillStyle = grad;
+    nightCtx.beginPath();
+    nightCtx.arc(sx, sy - 10, r, 0, Math.PI * 2);
+    nightCtx.fill();
+  }
+
+  nightCtx.globalCompositeOperation = 'source-over';
+  ctx.drawImage(nightCanvas, 0, 0);
+
+  // Stars + moon rendered on top of the darkness for visibility.
+  ctx.save();
+  const skyAlpha = Math.min(1, nightAlpha / 0.8);
+  const moonX = canvas.width * 0.85, moonY = canvas.height * 0.15;
+  ctx.globalAlpha = skyAlpha;
+  ctx.fillStyle = '#e8e2cf';
+  ctx.beginPath();
+  ctx.arc(moonX, moonY, 22, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(13,13,17,1)';
+  ctx.beginPath();
+  ctx.arc(moonX + 9, moonY - 5, 20, 0, Math.PI * 2);
+  ctx.fill();
+
+  const now = performance.now() * 0.001;
+  ctx.fillStyle = '#fff';
+  for (const s of stars) {
+    const twinkle = 0.35 + 0.65 * Math.abs(Math.sin(now * s.speed + s.phase));
+    ctx.globalAlpha = skyAlpha * twinkle;
+    ctx.beginPath();
+    ctx.arc(s.x * canvas.width, s.y * canvas.height, 1.3, 0, Math.PI * 2);
+    ctx.fill();
+  }
   ctx.restore();
 }
 
@@ -891,6 +1355,7 @@ function drawCharacter(p, isSelf) {
   const t = (p._walkFrame || 0);
   const bounce = p.isMoving ? Math.sin(t * 0.2) * 3 : 0;
   const legAngle = p.isMoving ? Math.sin(t * 0.2) * 0.3 : 0;
+  const sitOffset = p.isSitting ? 9 : 0; // squats the body down when sitting at a fire
 
   ctx.beginPath();
   ctx.ellipse(0, 2, 16, 6, 0, 0, Math.PI * 2);
@@ -935,15 +1400,15 @@ function drawCharacter(p, isSelf) {
 
   ctx.fillStyle = isSelf ? '#33291f' : '#2b2320';
   ctx.beginPath();
-  ctx.moveTo(-8, -25 + bounce);
-  ctx.lineTo(8, -25 + bounce);
-  ctx.lineTo(10, -10 + bounce);
-  ctx.lineTo(-10, -10 + bounce);
+  ctx.moveTo(-8, -25 + bounce + sitOffset);
+  ctx.lineTo(8, -25 + bounce + sitOffset);
+  ctx.lineTo(10, -10 + bounce + sitOffset);
+  ctx.lineTo(-10, -10 + bounce + sitOffset);
   ctx.closePath();
   ctx.fill();
   ctx.stroke();
 
-  const headY = -42 + bounce;
+  const headY = -42 + bounce + sitOffset;
   ctx.fillStyle = '#e8dcc8';
   ctx.beginPath();
   ctx.ellipse(0, headY, 15, 17, 0, 0, Math.PI * 2);
@@ -1001,6 +1466,31 @@ function drawCharacter(p, isSelf) {
   ctx.fillText(label, sx, sy - 68);
   ctx.restore();
 
+  // Chat bubble (fades out on its own)
+  if (p._chatBubble && performance.now() < p._chatBubble.until) {
+    const remaining = p._chatBubble.until - performance.now();
+    const alpha = Math.min(1, remaining / 600);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.font = '11px "Courier New", monospace';
+    const text = p._chatBubble.text;
+    const textW = ctx.measureText(text).width;
+    const padX = 8, padY = 5;
+    const boxW = textW + padX * 2, boxH = 18;
+    const bx = sx - boxW / 2, by = sy - 92;
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.strokeStyle = 'rgba(212,175,55,0.6)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect ? ctx.roundRect(bx, by, boxW, boxH, 4) : ctx.rect(bx, by, boxW, boxH);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#e0d7c6';
+    ctx.textAlign = 'center';
+    ctx.fillText(text, sx, by + boxH - padY);
+    ctx.restore();
+  }
+
   // advance local walk animation frame
   p._walkFrame = p.isMoving ? t + 1 : 0;
 }
@@ -1024,12 +1514,19 @@ function gameLoop(timestamp) {
   updateRenderPositions(dtSec);
   updateCamera(dtSec);
   updateParticles(dtSec);
+  updateFirePanel();
+  updateClockUI();
+  updateAudio(dtSec);
   drawBackground();
 
   const renderList = [];
   for (const id in resources) {
     const r = resources[id];
     if (isOnScreen(r.x, r.y, 120)) renderList.push({ type: r.type, y: r.y, data: r });
+  }
+  for (const id in campfires) {
+    const c = campfires[id];
+    if (isOnScreen(c.x, c.y, 100)) renderList.push({ type: 'campfire', y: c.y, data: c });
   }
   for (const id in animals) {
     const a = animals[id];
@@ -1044,11 +1541,15 @@ function gameLoop(timestamp) {
   for (const obj of renderList) {
     if (obj.type === 'tree') drawTree(obj.data);
     else if (obj.type === 'rock') drawRock(obj.data);
+    else if (obj.type === 'campfire') drawCampfire(obj.data);
     else if (obj.type === 'animal') drawRabbit(obj.data);
     else if (obj.type === 'player') drawCharacter(obj.data, obj.isSelf);
   }
 
   drawParticles();
+  drawNightOverlay(computeNightAlpha(dayTime));
+  drawFireflies(computeNightAlpha(dayTime));
+  drawMinimap();
 
   updateBarsUI();
   updateResourceUI();
