@@ -52,11 +52,18 @@ socket.on('connect', () => {
   socket.emit('join', { userId: myUserId, name: myName });
 });
 
+function initRenderPos(p) {
+  // renderX/renderY are the smoothed on-screen position; x/y stay server-authoritative.
+  p.renderX = p.x;
+  p.renderY = p.y;
+}
+
 socket.on('init', (data) => {
   selfId = data.selfId;
   world = data.world;
   players = data.players;
   resources = data.resources;
+  Object.values(players).forEach(initRenderPos);
   const self = players[selfId];
   if (self) {
     inventory = self.inventory;
@@ -67,6 +74,7 @@ socket.on('init', (data) => {
 });
 
 socket.on('player_joined', (p) => {
+  initRenderPos(p);
   players[p.id] = p;
   updatePlayersListUI();
 });
@@ -84,6 +92,7 @@ socket.on('state', (data) => {
       Object.assign(players[id], incoming);
     } else {
       players[id] = incoming;
+      initRenderPos(players[id]);
     }
   }
   // Remove any player not present anymore in snapshot
@@ -199,38 +208,38 @@ function updateJoyStick(clientX, clientY) {
   joystickVectorToKeys(dx, dy);
 }
 
-joystickZone.addEventListener('touchstart', (e) => {
+// Pointer Events unify mouse + touch + pen into one stream, so we never get
+// duplicate/conflicting touchstart+mousedown pairs on the same tap (this was
+// the main source of jittery, "double" joystick input on touch devices).
+joystickZone.addEventListener('pointerdown', (e) => {
   e.preventDefault();
-  const t = e.changedTouches[0];
-  handleJoyStart(t.clientX, t.clientY, t.identifier);
-}, { passive: false });
-
-joystickZone.addEventListener('touchmove', (e) => {
-  e.preventDefault();
-  for (const t of e.changedTouches) {
-    if (t.identifier === joyTouchId) handleJoyMove(t.clientX, t.clientY);
-  }
-}, { passive: false });
-
-window.addEventListener('touchend', (e) => {
-  for (const t of e.changedTouches) {
-    if (t.identifier === joyTouchId) handleJoyEnd();
-  }
+  joystickZone.setPointerCapture(e.pointerId);
+  handleJoyStart(e.clientX, e.clientY, e.pointerId);
 });
-
-// Mouse fallback for desktop testing of the joystick
-joystickZone.addEventListener('mousedown', (e) => { handleJoyStart(e.clientX, e.clientY, 'mouse'); });
-window.addEventListener('mousemove', (e) => { if (joyState.active) handleJoyMove(e.clientX, e.clientY); });
-window.addEventListener('mouseup', () => { if (joyState.active) handleJoyEnd(); });
+joystickZone.addEventListener('pointermove', (e) => {
+  if (e.pointerId !== joyTouchId) return;
+  e.preventDefault();
+  handleJoyMove(e.clientX, e.clientY);
+});
+function endJoyPointer(e) {
+  if (e.pointerId !== joyTouchId) return;
+  handleJoyEnd();
+}
+joystickZone.addEventListener('pointerup', endJoyPointer);
+joystickZone.addEventListener('pointercancel', endJoyPointer);
 
 // Eat button
-document.getElementById('eat-btn').addEventListener('click', () => {
+document.getElementById('eat-btn').addEventListener('pointerdown', (e) => {
+  e.preventDefault();
   socket.emit('eat');
 });
 
-// Action hint (chop) tap
-actionHintEl.addEventListener('click', () => { interactPressed = true; });
-actionHintEl.addEventListener('touchstart', (e) => { e.preventDefault(); interactPressed = true; }, { passive: false });
+// Action hint (chop) tap — single pointerdown handler only, to avoid the
+// double-fire (touchstart + synthetic click) that was hitting resources twice per tap.
+actionHintEl.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  interactPressed = true;
+});
 
 // ==================== SEND INPUT TO SERVER ====================
 let lastSentInput = '';
@@ -277,13 +286,26 @@ function processInteraction() {
 
 // ==================== CAMERA ====================
 const camera = { x: 0, y: 0 };
+
+// Smooths every player's visible position toward the latest server-authoritative
+// x/y. Without this, positions visibly snap every ~50ms (server broadcast rate)
+// instead of moving fluidly, which reads as stutter/glitching.
+function updateRenderPositions() {
+  for (const id in players) {
+    const p = players[id];
+    if (p.renderX === undefined) { p.renderX = p.x; p.renderY = p.y; }
+    p.renderX += (p.x - p.renderX) * 0.3;
+    p.renderY += (p.y - p.renderY) * 0.3;
+  }
+}
+
 function updateCamera() {
   const self = players[selfId];
   if (!self) return;
-  const targetX = self.x - canvas.width / 2;
-  const targetY = self.y - canvas.height / 2;
-  camera.x += (targetX - camera.x) * 0.15;
-  camera.y += (targetY - camera.y) * 0.15;
+  const targetX = self.renderX - canvas.width / 2;
+  const targetY = self.renderY - canvas.height / 2;
+  camera.x += (targetX - camera.x) * 0.2;
+  camera.y += (targetY - camera.y) * 0.2;
 }
 
 // ==================== RENDERING HELPERS ====================
@@ -381,8 +403,8 @@ function drawRock(r) {
 }
 
 function drawCharacter(p, isSelf) {
-  const sx = p.x - camera.x;
-  const sy = p.y - camera.y;
+  const sx = p.renderX - camera.x;
+  const sy = p.renderY - camera.y;
 
   ctx.save();
   ctx.translate(sx, sy);
@@ -496,6 +518,7 @@ function isOnScreen(x, y, margin) {
 
 function gameLoop() {
   processInteraction();
+  updateRenderPositions();
   updateCamera();
   drawBackground();
 
@@ -506,7 +529,7 @@ function gameLoop() {
   }
   for (const id in players) {
     const p = players[id];
-    if (isOnScreen(p.x, p.y, 150)) renderList.push({ type: 'player', y: p.y, data: p, isSelf: id === selfId });
+    if (isOnScreen(p.renderX, p.renderY, 150)) renderList.push({ type: 'player', y: p.renderY, data: p, isSelf: id === selfId });
   }
   renderList.sort((a, b) => a.y - b.y);
 
