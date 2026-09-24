@@ -61,11 +61,13 @@ let players = {};    // authoritative snapshot from server
 let resources = {};  // resourceId -> {id, type, x, y, size, hp, maxHp}
 let animals = {};    // animalId -> {id, type, x, y, hp, maxHp, facingRight, fleeing}
 let campfires = {};  // campfireId -> {id, x, y, fuel, radius, lit}
+let monsters = {};   // monsterId -> {id, x, y, hp, maxHp, facingRight, attacking}
 let dayTime = 0.2;   // 0..1 fraction of the day/night cycle (server-authoritative)
 let dayNumber = 1;
 let inventory = { wood: 0, stone: 0, meat: 0 };
 let health = 100, hunger = 100;
 let hasJoined = false;
+let hasSpear = false;
 const particles = []; // short-lived hit/chop effect particles
 
 // Joining happens when the player presses "Играть" on the start menu (see
@@ -74,8 +76,26 @@ const particles = []; // short-lived hit/chop effect particles
 function joinGame(name) {
   if (hasJoined) return;
   hasJoined = true;
+  setStartStatus('Подключение...');
   socket.emit('join', { userId: myUserId, name: name || myName });
+  // If the server never answers (dead/misconfigured deploy, cold-start delay,
+  // dropped connection), tell the player instead of leaving them stuck on a
+  // screen that looks alive but silently does nothing.
+  clearTimeout(joinTimeoutHandle);
+  joinTimeoutHandle = setTimeout(() => {
+    if (selfId === null) {
+      setStartStatus('Не удалось подключиться к серверу. Проверьте соединение и нажмите ещё раз.', true);
+      hasJoined = false;
+      startOverlayEl.classList.remove('hidden');
+      startPlayBtn.disabled = false;
+    }
+  }, 7000);
 }
+let joinTimeoutHandle = null;
+
+socket.on('connect', () => setStartStatus(''));
+socket.on('connect_error', () => setStartStatus('Ошибка подключения к серверу...', true));
+socket.on('disconnect', () => setStartStatus('Соединение потеряно. Переподключение...', true));
 
 function initRenderPos(p) {
   // renderX/renderY are the smoothed on-screen position; x/y stay server-authoritative.
@@ -84,22 +104,28 @@ function initRenderPos(p) {
 }
 
 socket.on('init', (data) => {
+  clearTimeout(joinTimeoutHandle);
   selfId = data.selfId;
   world = data.world;
   players = data.players;
   resources = data.resources;
   animals = data.animals || {};
   campfires = data.campfires || {};
+  monsters = data.monsters || {};
   dayTime = typeof data.dayTime === 'number' ? data.dayTime : dayTime;
   dayNumber = typeof data.dayNumber === 'number' ? data.dayNumber : dayNumber;
   Object.values(players).forEach(initRenderPos);
   Object.values(animals).forEach(initRenderPos);
+  Object.values(monsters).forEach(initRenderPos);
   const self = players[selfId];
   if (self) {
     inventory = self.inventory;
     health = self.health;
     hunger = self.hunger;
+    hasSpear = !!self.hasSpear;
   }
+  setStartStatus('');
+  startOverlayEl.classList.add('hidden');
   updatePlayersListUI();
 });
 
@@ -159,6 +185,21 @@ socket.on('state', (data) => {
     }
   }
 
+  if (data.monsters) {
+    for (const id in data.monsters) {
+      const incoming = data.monsters[id];
+      if (monsters[id]) {
+        Object.assign(monsters[id], incoming);
+      } else {
+        monsters[id] = incoming;
+        initRenderPos(monsters[id]);
+      }
+    }
+    for (const id in monsters) {
+      if (!data.monsters[id]) delete monsters[id];
+    }
+  }
+
   if (typeof data.dayTime === 'number') dayTime = data.dayTime;
   if (typeof data.dayNumber === 'number') dayNumber = data.dayNumber;
 
@@ -166,6 +207,24 @@ socket.on('state', (data) => {
 });
 
 socket.on('campfire_added', (c) => { campfires[c.id] = c; playIgniteSound(); });
+
+socket.on('monster_added', (m) => { monsters[m.id] = m; initRenderPos(m); });
+socket.on('monster_removed', (id) => {
+  const m = monsters[id];
+  if (m) spawnHitParticles(m.x, m.y, '#6b2fb3', 10);
+  delete monsters[id];
+});
+socket.on('monster_damaged', (data) => {
+  if (monsters[data.id]) {
+    monsters[data.id].hp = data.hp;
+    spawnHitParticles(monsters[data.id].x, monsters[data.id].y, '#6b2fb3', 4);
+  }
+});
+
+socket.on('night_wave_start', (data) => showWaveBanner(`🌙 Ночь ${data.day} — волна теней! (${data.count})`, '#8b2c2c'));
+socket.on('wave_end', () => showWaveBanner('☀️ Ночь пережита', '#7c8b2c'));
+
+socket.on('spear_crafted', () => { hasSpear = true; });
 
 socket.on('player_died', () => {
   showDeathOverlay();
@@ -393,10 +452,29 @@ const meatCountEl = document.getElementById('meat-count');
 const menuPlayersBodyEl = document.getElementById('menu-players-body');
 const actionHintEl = document.getElementById('action-hint');
 const dayNumberEl = document.getElementById('day-number');
+const hiddenBadgeEl = document.getElementById('hidden-badge');
+const HIDE_RADIUS = 45; // must match server — standing this close to a tree hides you from monsters
+
+function isNearTree(x, y) {
+  for (const id in resources) {
+    const r = resources[id];
+    if (r.type === 'tree' && Math.hypot(r.x - x, r.y - y) < HIDE_RADIUS) return true;
+  }
+  return false;
+}
 
 function updateBarsUI() {
   healthFillEl.style.width = Math.max(0, Math.min(100, health)) + '%';
   hungerFillEl.style.width = Math.max(0, Math.min(100, hunger)) + '%';
+
+  if (hiddenBadgeEl) {
+    const self = players[selfId];
+    const night = dayTime >= 0.65 || dayTime < 0.05;
+    const px = predicted.x !== undefined ? predicted.x : (self ? self.x : null);
+    const py = predicted.y !== undefined ? predicted.y : (self ? self.y : null);
+    const hidden = night && self && px !== null && isNearTree(px, py);
+    hiddenBadgeEl.style.display = hidden ? 'block' : 'none';
+  }
 }
 
 function updateResourceUI() {
@@ -407,6 +485,15 @@ function updateResourceUI() {
   if (invStoneEl) invStoneEl.textContent = inventory.stone || 0;
   if (invMeatEl) invMeatEl.textContent = inventory.meat || 0;
   if (craftCampfireBtn) craftCampfireBtn.disabled = (inventory.wood || 0) < 3;
+  if (craftSpearBtn) {
+    if (hasSpear) {
+      craftSpearBtn.textContent = '🗡️ Копьё изготовлено';
+      craftSpearBtn.disabled = true;
+    } else {
+      craftSpearBtn.textContent = '🗡️ Копьё (2 дерева, 1 камень)';
+      craftSpearBtn.disabled = (inventory.wood || 0) < 2 || (inventory.stone || 0) < 1;
+    }
+  }
 }
 
 function updatePlayersListUI() {
@@ -430,6 +517,7 @@ const invWoodEl = document.getElementById('inv-wood');
 const invStoneEl = document.getElementById('inv-stone');
 const invMeatEl = document.getElementById('inv-meat');
 const craftCampfireBtn = document.getElementById('craft-campfire-btn');
+const craftSpearBtn = document.getElementById('craft-spear-btn');
 
 function openInventory() { inventoryOverlayEl.classList.add('visible'); updateResourceUI(); }
 function closeInventory() { inventoryOverlayEl.classList.remove('visible'); }
@@ -453,6 +541,12 @@ craftCampfireBtn.addEventListener('pointerdown', (e) => {
   if ((inventory.wood || 0) < 3) return;
   socket.emit('place_campfire');
   closeInventory();
+});
+craftSpearBtn.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  if (hasSpear) return;
+  if ((inventory.wood || 0) < 2 || (inventory.stone || 0) < 1) return;
+  socket.emit('craft_spear');
 });
 
 // ==================== CAMPFIRE CONTEXTUAL PANEL (sit / feed) ====================
@@ -522,6 +616,13 @@ function updateClockUI() {
 const startOverlayEl = document.getElementById('start-overlay');
 const startNameInput = document.getElementById('start-name-input');
 const startPlayBtn = document.getElementById('start-play-btn');
+const startStatusEl = document.getElementById('start-status');
+
+function setStartStatus(text, isError) {
+  if (!startStatusEl) return;
+  startStatusEl.textContent = text || '';
+  startStatusEl.style.color = isError ? '#e07a5f' : '#8c8275';
+}
 
 if (tgUser && tgUser.name) {
   startNameInput.value = tgUser.name;
@@ -532,9 +633,12 @@ if (tgUser && tgUser.name) {
 
 function startGame() {
   ensureAudio();
+  startPlayBtn.disabled = true;
   const chosenName = startNameInput.value.trim().slice(0, 24) || myName;
   joinGame(chosenName);
-  startOverlayEl.classList.add('hidden');
+  // The overlay is hidden once 'init' actually arrives (see socket.on('init', ...)
+  // below) — hiding it immediately here would leave the player staring at an
+  // empty world with no feedback if the connection silently failed.
 }
 
 startPlayBtn.addEventListener('pointerdown', (e) => {
@@ -554,6 +658,17 @@ function showDeathOverlay() {
   playDeathSound();
   clearTimeout(deathHideTimer);
   deathHideTimer = setTimeout(() => deathOverlayEl.classList.remove('visible'), 2200);
+}
+
+// ==================== WAVE BANNER ====================
+const waveBannerEl = document.getElementById('wave-banner');
+let waveBannerHideTimer = null;
+function showWaveBanner(text, color) {
+  waveBannerEl.textContent = text;
+  waveBannerEl.style.color = color || '#e0d7c6';
+  waveBannerEl.classList.add('visible');
+  clearTimeout(waveBannerHideTimer);
+  waveBannerHideTimer = setTimeout(() => waveBannerEl.classList.remove('visible'), 4200);
 }
 
 // ==================== PAUSE / MENU PANEL ====================
@@ -664,6 +779,16 @@ function drawMinimap() {
     minimapCtx.fillStyle = c.lit ? '#ff8a3d' : '#4a4640';
     minimapCtx.beginPath();
     minimapCtx.arc(c.x * sx, c.y * sy, 2, 0, Math.PI * 2);
+    minimapCtx.fill();
+  }
+
+  // monsters as small pulsing purple/red dots so players can see a wave coming
+  const nowMs = performance.now();
+  for (const id in monsters) {
+    const m = monsters[id];
+    minimapCtx.fillStyle = m.attacking ? '#ff3b3b' : '#8b5fc9';
+    minimapCtx.beginPath();
+    minimapCtx.arc(m.x * sx, m.y * sy, 1.8 + Math.sin(nowMs * 0.01) * 0.6, 0, Math.PI * 2);
     minimapCtx.fill();
   }
 
@@ -800,9 +925,10 @@ setInterval(() => {
   }
 }, 50);
 
-// ==================== INTERACTION (CHOP / HUNT) ====================
+// ==================== INTERACTION (CHOP / HUNT / ATTACK) ====================
 const CHOP_RANGE = 90;
 const HUNT_RANGE = 100;
+const MONSTER_ATTACK_UI_RANGE = 90;
 
 function findNearestInteractable() {
   const self = players[selfId];
@@ -812,6 +938,17 @@ function findNearestInteractable() {
 
   let best = null;
   let bestDist = Infinity;
+
+  // Monsters take priority when in range — you want to fight, not accidentally chop a tree.
+  for (const id in monsters) {
+    const m = monsters[id];
+    const d = Math.hypot(px - m.x, py - m.y);
+    if (d < MONSTER_ATTACK_UI_RANGE && d < bestDist) {
+      best = { kind: 'monster', id: m.id, type: 'monster', x: m.x, y: m.y };
+      bestDist = d;
+    }
+  }
+  if (best) return best;
 
   for (const id in resources) {
     const r = resources[id];
@@ -832,7 +969,8 @@ function findNearestInteractable() {
   return best;
 }
 
-const HINT_TEXT = { tree: 'Рубить', rock: 'Добывать камень', rabbit: 'Охотиться' };
+const HINT_TEXT = { tree: 'Рубить', rock: 'Добывать камень', rabbit: 'Охотиться', monster: 'Атаковать' };
+const INTERACT_EVENT = { animal: 'hunt', monster: 'attack_monster' };
 
 function processInteraction() {
   const target = findNearestInteractable();
@@ -840,7 +978,7 @@ function processInteraction() {
     actionHintEl.classList.add('visible');
     actionHintEl.textContent = HINT_TEXT[target.type] || 'Взаимодействовать';
     if (interactPressed) {
-      socket.emit(target.kind === 'animal' ? 'hunt' : 'chop', target.id);
+      socket.emit(INTERACT_EVENT[target.kind] || 'chop', target.id);
       triggerSwing(target.x, target.y);
     }
   } else {
@@ -924,6 +1062,13 @@ function updateRenderPositions(dtSec) {
     const factor = 1 - Math.exp(-12 * dtSec);
     a.renderX += (a.x - a.renderX) * factor;
     a.renderY += (a.y - a.renderY) * factor;
+  }
+  for (const id in monsters) {
+    const m = monsters[id];
+    if (m.renderX === undefined) { m.renderX = m.x; m.renderY = m.y; }
+    const factor = 1 - Math.exp(-12 * dtSec);
+    m.renderX += (m.x - m.renderX) * factor;
+    m.renderY += (m.y - m.renderY) * factor;
   }
 }
 
@@ -1277,6 +1422,63 @@ function drawNightOverlay(nightAlpha) {
   ctx.restore();
 }
 
+function drawMonster(m) {
+  const sx = m.renderX - camera.x;
+  const sy = m.renderY - camera.y;
+  ctx.save();
+  ctx.translate(sx, sy);
+
+  const now = performance.now();
+  const bob = Math.sin(now * 0.006) * 2;
+  const jitter = m.attacking ? Math.sin(now * 0.05) * 2 : 0;
+
+  // shadow
+  ctx.beginPath();
+  ctx.ellipse(0, 3, 13, 5, 0, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fill();
+
+  // wispy dark body — a Don't-Starve-ish shadow creature
+  ctx.fillStyle = 'rgba(20,10,30,0.92)';
+  ctx.strokeStyle = 'rgba(107,47,179,0.7)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(-11 + jitter, 2 + bob);
+  ctx.quadraticCurveTo(-14, -14 + bob, -5, -26 + bob);
+  ctx.quadraticCurveTo(0, -32 + bob, 5, -26 + bob);
+  ctx.quadraticCurveTo(14, -14 + bob, 11 - jitter, 2 + bob);
+  ctx.quadraticCurveTo(4, -4 + bob, 0, 2 + bob);
+  ctx.quadraticCurveTo(-4, -4 + bob, -11 + jitter, 2 + bob);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // glowing eyes
+  const eyeColor = m.attacking ? '#ff3b3b' : '#c98bff';
+  ctx.fillStyle = eyeColor;
+  ctx.shadowColor = eyeColor;
+  ctx.shadowBlur = 6;
+  ctx.beginPath();
+  ctx.arc(-4, -20 + bob, 1.8, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(4, -20 + bob, 1.8, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+
+  ctx.restore();
+
+  // HP bar (only while damaged, so full-health monsters don't clutter the screen)
+  if (m.hp < m.maxHp) {
+    const w = 26;
+    const frac = Math.max(0, m.hp / m.maxHp);
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(sx - w / 2, sy - 40, w, 4);
+    ctx.fillStyle = '#8b2c2c';
+    ctx.fillRect(sx - w / 2, sy - 40, w * frac, 4);
+  }
+}
+
 function drawRabbit(a) {
   const sx = a.renderX - camera.x;
   const sy = a.renderY - camera.y;
@@ -1532,6 +1734,10 @@ function gameLoop(timestamp) {
     const a = animals[id];
     if (isOnScreen(a.renderX, a.renderY, 80)) renderList.push({ type: 'animal', y: a.renderY, data: a });
   }
+  for (const id in monsters) {
+    const m = monsters[id];
+    if (isOnScreen(m.renderX, m.renderY, 80)) renderList.push({ type: 'monster', y: m.renderY, data: m });
+  }
   for (const id in players) {
     const p = players[id];
     if (isOnScreen(p.renderX, p.renderY, 150)) renderList.push({ type: 'player', y: p.renderY, data: p, isSelf: id === selfId });
@@ -1543,6 +1749,7 @@ function gameLoop(timestamp) {
     else if (obj.type === 'rock') drawRock(obj.data);
     else if (obj.type === 'campfire') drawCampfire(obj.data);
     else if (obj.type === 'animal') drawRabbit(obj.data);
+    else if (obj.type === 'monster') drawMonster(obj.data);
     else if (obj.type === 'player') drawCharacter(obj.data, obj.isSelf);
   }
 
