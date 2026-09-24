@@ -11,7 +11,18 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3000;
 
-app.use(express.static(path.join(__dirname, 'public')));
+// Disable caching for the app's own files. This game is under heavy active
+// development — every deploy must be picked up immediately by clients, never
+// served stale from a phone's browser cache (this has repeatedly caused
+// "I updated the code but nothing changed" confusion).
+app.use((req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  next();
+});
+
+app.use(express.static(path.join(__dirname, 'public'), { etag: false, lastModified: false, maxAge: 0 }));
 
 // ==================== WORLD STATE ====================
 const WORLD_WIDTH = 3000;
