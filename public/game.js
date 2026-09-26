@@ -75,14 +75,16 @@ let resourceNodes = {};
 let walls = {};
 let turrets = {};
 let beacons = {};
+let traps = {};
 let monsters = {};
 let team = { iron: 0, crystals: 0, shadowCores: 0 };
-let altar = { x: 1700, y: 1700, hp: 500, maxHp: 500, baseRadius: 260 };
+let altar = { x: 1700, y: 1700, hp: 500, maxHp: 500, baseRadius: 260, tier: 1 };
 let wave = 0;
 let phase = { phase: 'day', frac: 0, msLeft: 120000 };
 let hasJoined = false;
 let roomCode = null;
 const particles = [];
+const floatingTexts = [];
 const projectiles = [];
 
 function joinGame(name, mode, code) {
@@ -127,6 +129,7 @@ socket.on('init', (data) => {
   walls = data.walls || {};
   turrets = data.turrets || {};
   beacons = data.beacons || {};
+  traps = data.traps || {};
   monsters = data.monsters || {};
   team = data.team || team;
   altar = data.altar || altar;
@@ -140,6 +143,10 @@ socket.on('init', (data) => {
   updateRoomCodeUI();
   updatePlayersListUI();
   updateResourcesUI();
+
+  let tutorialSeen = false;
+  try { tutorialSeen = localStorage.getItem('altar_td_tutorial_seen') === '1'; } catch (e) {}
+  if (!tutorialSeen) setTimeout(openTutorial, 400);
 });
 
 socket.on('player_joined', (p) => { initRenderPos(p); players[p.id] = p; updatePlayersListUI(); });
@@ -175,7 +182,10 @@ socket.on('state', (data) => {
 socket.on('node_added', (n) => { resourceNodes[n.id] = n; });
 socket.on('node_removed', (id) => {
   const n = resourceNodes[id];
-  if (n) spawnHitParticles(n.x, n.y, n.type === 'iron' ? '#c9a227' : '#8bd8ff', 10);
+  if (n) {
+    spawnHitParticles(n.x, n.y, n.type === 'iron' ? '#c9a227' : '#8bd8ff', 10);
+    spawnFloatingText(n.x, n.y - 20, n.type === 'iron' ? '+🔩' : '+💎', n.type === 'iron' ? '#c9a227' : '#8bd8ff');
+  }
   delete resourceNodes[id];
 });
 socket.on('node_damaged', (data) => {
@@ -211,10 +221,27 @@ socket.on('beacon_added', (b) => { beacons[b.id] = b; playBuildSound(); });
 socket.on('beacon_updated', (d) => { if (beacons[d.id]) beacons[d.id].hp = d.hp; });
 socket.on('beacon_removed', (id) => { delete beacons[id]; });
 
+socket.on('trap_added', (t) => { traps[t.id] = t; playBuildSound(); });
+socket.on('trap_updated', (d) => { if (traps[d.id]) traps[d.id].hp = d.hp; });
+socket.on('trap_removed', (id) => {
+  const t = traps[id];
+  if (t) spawnHitParticles(t.x, t.y, '#5a4a36', 8);
+  delete traps[id];
+});
+
+socket.on('altar_upgraded', (d) => {
+  altar.tier = d.tier; altar.maxHp = d.maxHp; altar.baseRadius = d.baseRadius;
+  spawnFloatingText(altar.x, altar.y - 60, `Алтарь ⇧ Уровень ${d.tier}`, '#d4af37');
+  playBuildSound();
+});
+
 socket.on('monster_added', (m) => { monsters[m.id] = m; initRenderPos(m); });
 socket.on('monster_removed', (id) => {
   const m = monsters[id];
-  if (m) spawnHitParticles(m.x, m.y, '#6b2fb3', 10);
+  if (m) {
+    spawnHitParticles(m.x, m.y, '#6b2fb3', 10);
+    spawnFloatingText(m.x, m.y - 20, '+🌑', '#8b5fc9');
+  }
   delete monsters[id];
 });
 socket.on('monster_damaged', (data) => {
@@ -226,10 +253,13 @@ socket.on('monster_damaged', (data) => {
 
 socket.on('team_resources', (t) => { team = t; updateResourcesUI(); });
 
-socket.on('wave_start', (d) => showWaveBanner(`🌙 Волна ${d.wave} — враги идут к алтарю! (${d.count})`, '#8b2c2c'));
+socket.on('wave_start', (d) => showWaveBanner(d.boss ? `🌙 Волна ${d.wave} — приближается БОСС!` : `🌙 Волна ${d.wave} — враги идут к алтарю! (${d.count})`, '#8b2c2c'));
 socket.on('wave_end', (d) => showWaveBanner(`☀️ Волна ${d.wave} отражена`, '#7c8b2c'));
 
-socket.on('altar_destroyed', () => showFallenOverlay());
+socket.on('altar_destroyed', (d) => {
+  if (d) { altar.tier = d.tier; altar.maxHp = d.maxHp; altar.baseRadius = d.baseRadius; }
+  showFallenOverlay();
+});
 socket.on('player_died', () => { playDeathSound(); });
 
 socket.on('chat', (msg) => {
@@ -239,6 +269,7 @@ socket.on('chat', (msg) => {
 
 // ==================== UI: TOP HUD ====================
 const altarHpFillEl = document.getElementById('altar-hp-fill');
+const altarTierEl = document.getElementById('altar-tier');
 const phaseIconEl = document.getElementById('phase-icon');
 const phaseTextEl = document.getElementById('phase-text');
 const phaseTimerEl = document.getElementById('phase-timer');
@@ -274,6 +305,7 @@ function formatMs(ms) {
 function updateHudTop() {
   altarHpFillEl.style.width = Math.max(0, Math.min(100, (altar.hp / altar.maxHp) * 100)) + '%';
   altarHpFillEl.style.background = (altar.hp / altar.maxHp) < 0.3 ? 'linear-gradient(90deg,#8b2c2c,#c9453e)' : 'linear-gradient(90deg,#d4af37,#f0d878)';
+  if (altarTierEl) altarTierEl.textContent = `Ур.${altar.tier || 1}`;
 
   if (phase.phase === 'night') { phaseIconEl.textContent = '🌙'; phaseTextEl.textContent = `Волна ${wave}`; }
   else { phaseIconEl.textContent = '☀️'; phaseTextEl.textContent = 'День'; }
@@ -328,6 +360,32 @@ function drawParticles() {
   }
   ctx.globalAlpha = 1;
 }
+
+// ==================== FLOATING COMBAT TEXT ====================
+function spawnFloatingText(x, y, text, color) {
+  floatingTexts.push({ x, y, text, color: color || '#e6e0d4', life: 1.1, maxLife: 1.1 });
+}
+function updateFloatingTexts(dtSec) {
+  for (let i = floatingTexts.length - 1; i >= 0; i--) {
+    const f = floatingTexts[i];
+    f.life -= dtSec;
+    if (f.life <= 0) { floatingTexts.splice(i, 1); continue; }
+    f.y -= 26 * dtSec;
+  }
+}
+function drawFloatingTexts() {
+  ctx.font = 'bold 12px "Courier New", monospace';
+  ctx.textAlign = 'center';
+  for (const f of floatingTexts) {
+    ctx.globalAlpha = Math.max(0, f.life / f.maxLife);
+    ctx.fillStyle = '#000';
+    ctx.fillText(f.text, f.x - camera.x + 1, f.y - camera.y + 1);
+    ctx.fillStyle = f.color;
+    ctx.fillText(f.text, f.x - camera.x, f.y - camera.y);
+  }
+  ctx.globalAlpha = 1;
+}
+
 function drawProjectiles() {
   const now = performance.now();
   for (let i = projectiles.length - 1; i >= 0; i--) {
@@ -503,6 +561,56 @@ function showFallenOverlay() {
   setTimeout(() => fallenOverlayEl.classList.remove('visible'), 3200);
 }
 
+// ==================== TUTORIAL (first-run onboarding) ====================
+const TUTORIAL_STEPS = [
+  { icon: '🕹️', title: 'Движение', text: 'Джойстик слева — ведите пальцем, чтобы двигаться по миру.' },
+  { icon: '⛏️', title: 'Добыча', text: 'Подойдите к руде или кристаллу — снизу появится кнопка действия. Нажмите её несколько раз, чтобы добыть ресурс в общий запас команды.' },
+  { icon: '🧱', title: 'Постройки', text: 'Иконки над кнопкой действия — стена, турель, маяк, ловушка. Выберите постройку — рядом с вами появится призрачный круг. Подтвердите кнопкой действия, если хватает ресурсов.' },
+  { icon: '🛡️', title: 'Безопасная зона', text: 'Золотой купол вокруг алтаря и маяков — там светло и вы лечитесь. За куполом ночью опасно.' },
+  { icon: '🌙', title: 'Ночные волны', text: 'Ночью монстры идут к алтарю. Стены и турели перехватывают их по пути — атакуйте сами той же кнопкой действия.' },
+  { icon: '🏛️', title: 'Алтарь', text: 'Если его HP дойдёт до нуля — база падёт и всё начнётся заново. Подойдите к алтарю и улучшите его, когда хватит ресурсов — станет прочнее, а купол — шире.' },
+  { icon: '👥', title: 'Играйте вместе', text: 'Позовите друга по коду комнаты — код показан в меню ☰. Удачи!' }
+];
+const tutorialOverlayEl = document.getElementById('tutorial-overlay');
+const tutorialIconEl = document.getElementById('tutorial-icon');
+const tutorialTitleEl = document.getElementById('tutorial-title');
+const tutorialTextEl = document.getElementById('tutorial-text');
+const tutorialDotsEl = document.getElementById('tutorial-dots');
+const tutorialNextBtn = document.getElementById('tutorial-next-btn');
+const tutorialSkipBtn = document.getElementById('tutorial-skip-btn');
+let tutorialStep = 0;
+
+function renderTutorialStep() {
+  const step = TUTORIAL_STEPS[tutorialStep];
+  tutorialIconEl.textContent = step.icon;
+  tutorialTitleEl.textContent = step.title;
+  tutorialTextEl.textContent = step.text;
+  tutorialDotsEl.innerHTML = TUTORIAL_STEPS.map((_, i) => `<div class="dot${i === tutorialStep ? ' active' : ''}"></div>`).join('');
+  tutorialNextBtn.textContent = (tutorialStep === TUTORIAL_STEPS.length - 1) ? 'Начать!' : 'Далее';
+}
+function openTutorial() {
+  tutorialStep = 0;
+  renderTutorialStep();
+  tutorialOverlayEl.classList.add('visible');
+}
+function closeTutorial() {
+  tutorialOverlayEl.classList.remove('visible');
+  try { localStorage.setItem('altar_td_tutorial_seen', '1'); } catch (e) {}
+}
+tutorialNextBtn.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  if (tutorialStep < TUTORIAL_STEPS.length - 1) { tutorialStep++; renderTutorialStep(); }
+  else closeTutorial();
+});
+tutorialSkipBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); closeTutorial(); });
+
+const menuTutorialBtn = document.getElementById('menu-tutorial-btn');
+menuTutorialBtn.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  menuOverlayEl.classList.remove('visible');
+  openTutorial();
+});
+
 // ==================== WAVE BANNER ====================
 const waveBannerEl = document.getElementById('wave-banner');
 let waveBannerHideTimer = null;
@@ -626,6 +734,7 @@ function drawMinimap() {
   for (const id in walls) { minimapCtx.fillStyle = '#5a4a36'; minimapCtx.fillRect(walls[id].x * sx - 1, walls[id].y * sy - 1, 2, 2); }
   for (const id in turrets) { minimapCtx.fillStyle = '#9bb8d4'; minimapCtx.fillRect(turrets[id].x * sx - 1.5, turrets[id].y * sy - 1.5, 3, 3); }
   for (const id in beacons) { minimapCtx.fillStyle = '#ffcf5c'; minimapCtx.fillRect(beacons[id].x * sx - 1.5, beacons[id].y * sy - 1.5, 3, 3); }
+  for (const id in traps) { minimapCtx.fillStyle = '#8a6a4a'; minimapCtx.fillRect(traps[id].x * sx - 1, traps[id].y * sy - 1, 2, 2); }
 
   const nowMs = performance.now();
   for (const id in monsters) {
@@ -779,12 +888,18 @@ const RES_ICON = { iron: '🔩', crystals: '💎' };
 const BUILD_INFO = {
   wall: { label: 'Стена', cost: { iron: 5 } },
   turret: { label: 'Турель', cost: { iron: 12, crystals: 4 } },
-  beacon: { label: 'Маяк', cost: { crystals: 6 } }
+  beacon: { label: 'Маяк', cost: { crystals: 6 } },
+  trap: { label: 'Ловушка', cost: { iron: 4 } }
 };
+const ALTAR_UPGRADE_COSTS = [
+  { iron: 25, crystals: 12 },
+  { iron: 50, crystals: 28 }
+];
 let buildMode = null;
 
-['build-wall', 'build-turret', 'build-beacon'].forEach((id) => {
+['build-wall', 'build-turret', 'build-beacon', 'build-trap'].forEach((id) => {
   const el = document.getElementById(id);
+  if (!el) return;
   el.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     const type = el.dataset.type;
@@ -837,7 +952,23 @@ function findNearestInteractable() {
     const d = Math.hypot(px - b.x, py - b.y);
     if (d < REPAIR_RANGE && d < bestDist) { bestDist = d; best = { x: b.x, y: b.y, label: 'Починить маяк (2🔩)', event: 'repair', payload: { kind: 'beacon', id: b.id } }; }
   }
+  for (const id in traps) {
+    const tr = traps[id];
+    if (tr.hp >= tr.maxHp) continue;
+    const d = Math.hypot(px - tr.x, py - tr.y);
+    if (d < REPAIR_RANGE && d < bestDist) { bestDist = d; best = { x: tr.x, y: tr.y, label: 'Починить ловушку (2🔩)', event: 'repair', payload: { kind: 'trap', id: tr.id } }; }
+  }
   if (best) return best;
+
+  // Altar upgrade — offered when standing close enough and not already maxed out.
+  if (ALTAR_UPGRADE_COSTS[altar.tier - 1]) {
+    const dAltar = Math.hypot(px - altar.x, py - altar.y);
+    if (dAltar < 160) {
+      const cost = ALTAR_UPGRADE_COSTS[altar.tier - 1];
+      const costStr = Object.entries(cost).map(([k, v]) => `${v}${RES_ICON[k]}`).join(' ');
+      return { x: altar.x, y: altar.y, label: `Улучшить алтарь (${costStr})`, event: 'upgrade_altar', payload: null };
+    }
+  }
 
   for (const id in resourceNodes) {
     const n = resourceNodes[id];
@@ -904,23 +1035,58 @@ function isOnScreen(x, y, margin) {
 function drawBackground() {
   ctx.fillStyle = '#141019';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.strokeStyle = '#241d2c';
-  ctx.lineWidth = 1;
 
   const startX = Math.floor(camera.x / 60) * 60;
   const startY = Math.floor(camera.y / 60) * 60;
   for (let i = startX; i < camera.x + canvas.width + 60; i += 60) {
     for (let j = startY; j < camera.y + canvas.height + 60; j += 60) {
       const sx = i - camera.x, sy = j - camera.y;
+      const safe = isInSafeZoneClient(i, j);
       const h = hashXY(i, j);
-      if (h < 0.05) {
-        ctx.fillStyle = '#3a3450';
-        ctx.beginPath(); ctx.ellipse(sx, sy, 3, 2, 0, 0, Math.PI * 2); ctx.fill();
+
+      // Base tint makes the safe zone read as cultivated home ground, and the
+      // wild as cold, untamed earth — the "which zone am I in" question
+      // should be answerable at a glance, without even looking at the dome.
+      ctx.fillStyle = safe ? '#241c14' : '#161320';
+      ctx.fillRect(sx - 30, sy - 30, 60, 60);
+
+      if (safe) {
+        if (h < 0.05) {
+          const petalColor = h < 0.02 ? '#c9a227' : (h < 0.035 ? '#a6543a' : '#6a8a4a');
+          ctx.fillStyle = petalColor;
+          for (let k = 0; k < 3; k++) {
+            const ang = (k / 3) * Math.PI * 2;
+            ctx.beginPath(); ctx.arc(sx + Math.cos(ang) * 3, sy + Math.sin(ang) * 3, 1.6, 0, Math.PI * 2); ctx.fill();
+          }
+          ctx.fillStyle = '#3a2a1a';
+          ctx.beginPath(); ctx.arc(sx, sy, 1.2, 0, Math.PI * 2); ctx.fill();
+        } else {
+          ctx.strokeStyle = '#4a3d2a'; ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(sx, sy); ctx.lineTo(sx + 4, sy - 8);
+          ctx.moveTo(sx + 3, sy); ctx.lineTo(sx + 8, sy - 6);
+          ctx.stroke();
+        }
       } else {
-        ctx.beginPath();
-        ctx.moveTo(sx, sy); ctx.lineTo(sx + 4, sy - 8);
-        ctx.moveTo(sx + 3, sy); ctx.lineTo(sx + 8, sy - 6);
-        ctx.stroke();
+        if (h < 0.02) {
+          ctx.strokeStyle = 'rgba(200,195,180,0.5)'; ctx.lineWidth = 1.5;
+          ctx.beginPath(); ctx.moveTo(sx - 4, sy); ctx.lineTo(sx + 4, sy); ctx.stroke();
+          ctx.fillStyle = 'rgba(200,195,180,0.5)';
+          ctx.beginPath(); ctx.arc(sx - 4, sy, 1.4, 0, Math.PI * 2); ctx.fill();
+          ctx.beginPath(); ctx.arc(sx + 4, sy, 1.4, 0, Math.PI * 2); ctx.fill();
+        } else if (h < 0.09) {
+          ctx.fillStyle = '#332b3e';
+          ctx.beginPath(); ctx.ellipse(sx, sy, 3, 2, 0, 0, Math.PI * 2); ctx.fill();
+        } else if (h < 0.14) {
+          ctx.strokeStyle = 'rgba(0,0,0,0.4)'; ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.moveTo(sx - 5, sy - 2); ctx.lineTo(sx, sy + 3); ctx.lineTo(sx + 5, sy - 1); ctx.stroke();
+        } else {
+          ctx.strokeStyle = '#241d2c'; ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(sx, sy); ctx.lineTo(sx + 4, sy - 8);
+          ctx.moveTo(sx + 3, sy); ctx.lineTo(sx + 8, sy - 6);
+          ctx.stroke();
+        }
       }
     }
   }
@@ -1000,6 +1166,15 @@ function drawAltar() {
 function drawIronVein(n) {
   const sx = n.x - camera.x, sy = n.y - camera.y;
   ctx.save(); ctx.translate(sx, sy);
+
+  const now = performance.now();
+  const pulse = 0.6 + Math.sin(now * 0.0025 + n.x) * 0.4;
+  const grad = ctx.createRadialGradient(0, 0, 2, 0, 0, n.size * 1.3);
+  grad.addColorStop(0, `rgba(212,175,55,${0.22 * pulse})`);
+  grad.addColorStop(1, 'rgba(212,175,55,0)');
+  ctx.fillStyle = grad;
+  ctx.beginPath(); ctx.arc(0, 0, n.size * 1.3, 0, Math.PI * 2); ctx.fill();
+
   ctx.beginPath(); ctx.ellipse(0, n.size * 0.3, n.size * 0.5, n.size * 0.18, 0, 0, Math.PI * 2);
   ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.fill();
 
@@ -1115,16 +1290,72 @@ function drawBeacon(b) {
   ctx.restore();
 }
 
+function drawTrap(tr) {
+  const sx = tr.x - camera.x, sy = tr.y - camera.y;
+  const dmg = 1 - tr.hp / tr.maxHp;
+  ctx.save(); ctx.translate(sx, sy);
+
+  // faint radius indicator so players can see its coverage
+  ctx.strokeStyle = 'rgba(200,60,50,0.25)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(0, 0, tr.radius, 0, Math.PI * 2); ctx.stroke();
+
+  ctx.beginPath(); ctx.ellipse(0, 5, 16, 5, 0, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fill();
+
+  const plateColor = dmg > 0.5 ? '#241a12' : '#3a2c20';
+  ctx.fillStyle = plateColor; ctx.strokeStyle = '#15100a'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.ellipse(0, 4, 15, 5, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+
+  ctx.fillStyle = '#6b6459'; ctx.strokeStyle = '#15100a';
+  for (const dx of [-8, -2.5, 3, 9]) {
+    ctx.beginPath();
+    ctx.moveTo(dx - 3, 4); ctx.lineTo(dx, -12); ctx.lineTo(dx + 3, 4);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function drawMonster(m) {
   const sx = m.renderX - camera.x, sy = m.renderY - camera.y;
   const isRammer = m.type === 'rammer';
+  const isBoss = m.type === 'boss';
   ctx.save(); ctx.translate(sx, sy);
 
   const now = performance.now();
-  const bob = Math.sin(now * (isRammer ? 0.004 : 0.01)) * (isRammer ? 1.5 : 2.5);
+  const bob = Math.sin(now * (isBoss ? 0.003 : isRammer ? 0.004 : 0.01)) * (isBoss ? 3 : isRammer ? 1.5 : 2.5);
   const jitter = m.attacking ? Math.sin(now * 0.05) * 2 : 0;
 
-  if (isRammer) {
+  if (isBoss) {
+    // ---- BOSS: a hulking dread-lord, scaled well above the regular pack ----
+    const auraPulse = 0.6 + Math.sin(now * 0.0025) * 0.4;
+    const aura = ctx.createRadialGradient(0, -10, 4, 0, -10, 60);
+    aura.addColorStop(0, `rgba(139,47,179,${0.28 * auraPulse})`);
+    aura.addColorStop(1, 'rgba(139,47,179,0)');
+    ctx.fillStyle = aura;
+    ctx.beginPath(); ctx.arc(0, -10, 60, 0, Math.PI * 2); ctx.fill();
+
+    ctx.beginPath(); ctx.ellipse(0, 10, 32, 11, 0, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fill();
+
+    ctx.fillStyle = '#160a1c'; ctx.strokeStyle = 'rgba(200,80,255,0.55)'; ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(-30 + jitter, 6 + bob); ctx.lineTo(-36, -18 + bob); ctx.lineTo(-18, -46 + bob);
+    ctx.lineTo(18, -46 + bob); ctx.lineTo(36, -18 + bob); ctx.lineTo(30 - jitter, 6 + bob);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+
+    ctx.strokeStyle = 'rgba(120,50,150,0.6)'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(-28, -8 + bob); ctx.lineTo(28, -8 + bob); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-24, -26 + bob); ctx.lineTo(24, -26 + bob); ctx.stroke();
+
+    ctx.strokeStyle = 'rgba(210,110,255,0.9)'; ctx.lineWidth = 3.5; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(-16, -42 + bob); ctx.lineTo(-30, -60 + bob); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(16, -42 + bob); ctx.lineTo(30, -60 + bob); ctx.stroke();
+
+    const eyeColor = '#ff3b3b';
+    ctx.fillStyle = eyeColor; ctx.shadowColor = eyeColor; ctx.shadowBlur = 9;
+    for (const ex of [-12, -2, 8]) { ctx.beginPath(); ctx.arc(ex, -28 + bob, 2.6, 0, Math.PI * 2); ctx.fill(); }
+    ctx.shadowBlur = 0;
+  } else if (isRammer) {
     // ---- RAMMER: bulky armored brute ----
     ctx.beginPath(); ctx.ellipse(0, 6, 22, 8, 0, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fill();
@@ -1177,9 +1408,9 @@ function drawMonster(m) {
   ctx.restore();
 
   if (m.hp < m.maxHp) {
-    const w = isRammer ? 34 : 26, frac = Math.max(0, m.hp / m.maxHp), barY = isRammer ? 44 : 26;
-    ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(sx - w / 2, sy - barY, w, 4);
-    ctx.fillStyle = '#8b2c2c'; ctx.fillRect(sx - w / 2, sy - barY, w * frac, 4);
+    const w = isBoss ? 60 : isRammer ? 34 : 26, frac = Math.max(0, m.hp / m.maxHp), barY = isBoss ? 68 : isRammer ? 44 : 26;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(sx - w / 2, sy - barY, w, isBoss ? 5 : 4);
+    ctx.fillStyle = isBoss ? '#8b2fb3' : '#8b2c2c'; ctx.fillRect(sx - w / 2, sy - barY, w * frac, isBoss ? 5 : 4);
   }
 }
 
@@ -1285,7 +1516,17 @@ const stars = [];
 for (let i = 0; i < 80; i++) stars.push({ x: Math.random(), y: Math.random(), phase: Math.random() * Math.PI * 2, speed: 0.4 + Math.random() * 1.4 });
 
 function drawDomeOverlay() {
-  const wildAlpha = phase.phase === 'night' ? 0.78 : 0.22;
+  // Day should read as genuinely bright and safe to explore; only night brings
+  // real darkness. Short fade transitions at dawn/dusk avoid an abrupt snap.
+  const DAY_ALPHA = 0.04, NIGHT_ALPHA = 0.8;
+  let wildAlpha;
+  if (phase.phase === 'day') {
+    const fadeOut = Math.min(1, phase.frac / 0.05); // dawn: darkness recedes
+    wildAlpha = NIGHT_ALPHA + (DAY_ALPHA - NIGHT_ALPHA) * fadeOut;
+  } else {
+    const fadeIn = Math.min(1, phase.frac / 0.06); // dusk: darkness falls
+    wildAlpha = DAY_ALPHA + (NIGHT_ALPHA - DAY_ALPHA) * fadeIn;
+  }
 
   nightCtx.clearRect(0, 0, nightCanvas.width, nightCanvas.height);
   nightCtx.fillStyle = `rgba(10,8,22,${wildAlpha})`;
@@ -1386,6 +1627,7 @@ function gameLoop(timestamp) {
   updateRenderPositions(dtSec);
   updateCamera(dtSec);
   updateParticles(dtSec);
+  updateFloatingTexts(dtSec);
   updateHudTop();
   updateAudio();
   drawBackground();
@@ -1396,6 +1638,7 @@ function gameLoop(timestamp) {
   for (const id in walls) { const w = walls[id]; if (isOnScreen(w.x, w.y, 60)) renderList.push({ type: 'wall', y: w.y, data: w }); }
   for (const id in turrets) { const t = turrets[id]; if (isOnScreen(t.x, t.y, 60)) renderList.push({ type: 'turret', y: t.y, data: t }); }
   for (const id in beacons) { const b = beacons[id]; if (isOnScreen(b.x, b.y, 80)) renderList.push({ type: 'beacon', y: b.y, data: b }); }
+  for (const id in traps) { const tr = traps[id]; if (isOnScreen(tr.x, tr.y, tr.radius + 20)) renderList.push({ type: 'trap', y: tr.y, data: tr }); }
   for (const id in monsters) { const m = monsters[id]; if (isOnScreen(m.renderX, m.renderY, 80)) renderList.push({ type: 'monster', y: m.renderY, data: m }); }
   for (const id in players) { const p = players[id]; if (isOnScreen(p.renderX, p.renderY, 150)) renderList.push({ type: 'player', y: p.renderY, data: p, isSelf: id === selfId }); }
   renderList.sort((a, b) => a.y - b.y);
@@ -1407,12 +1650,14 @@ function gameLoop(timestamp) {
     else if (obj.type === 'wall') drawWall(obj.data);
     else if (obj.type === 'turret') drawTurret(obj.data);
     else if (obj.type === 'beacon') drawBeacon(obj.data);
+    else if (obj.type === 'trap') drawTrap(obj.data);
     else if (obj.type === 'monster') drawMonster(obj.data);
     else if (obj.type === 'player') drawCharacter(obj.data, obj.isSelf);
   }
 
   drawBuildGhost();
   drawParticles();
+  drawFloatingTexts();
   drawProjectiles();
   drawDomeOverlay();
   drawFireflies();

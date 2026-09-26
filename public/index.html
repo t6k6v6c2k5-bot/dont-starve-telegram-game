@@ -148,6 +148,26 @@
   #menu-help-list div { padding: 3px 0; }
   #menu-help-list b { color: #d4af37; }
 
+  /* ---------- Tutorial ---------- */
+  #tutorial-overlay { z-index: 45; }
+  #tutorial-panel { text-align: center; }
+  #tutorial-icon { font-size: 34px; margin-bottom: 8px; }
+  #tutorial-title { font-size: 15px; color: #d4af37; margin-bottom: 8px; }
+  #tutorial-text { font-size: 13px; color: #e6e0d4; line-height: 1.6; min-height: 60px; }
+  #tutorial-dots { display: flex; justify-content: center; gap: 6px; margin: 14px 0; }
+  #tutorial-dots .dot { width: 6px; height: 6px; border-radius: 50%; background: #4a3f30; }
+  #tutorial-dots .dot.active { background: #d4af37; }
+  #tutorial-buttons { display: flex; justify-content: space-between; gap: 10px; }
+  #tutorial-skip-btn {
+    font-family: inherit; font-size: 12px; color: #8c8275;
+    background: none; border: 1px solid #4a3f30; border-radius: 6px; padding: 10px 14px;
+  }
+  #tutorial-next-btn {
+    flex: 1; font-family: inherit; font-size: 13px; color: #0d0d11; font-weight: bold;
+    background: #d4af37; border: none; border-radius: 6px; padding: 10px 14px;
+  }
+  #tutorial-next-btn:active { background: #b8952e; }
+
   /* ---------- Start menu ---------- */
   #start-overlay {
     position: absolute; inset: 0; z-index: 40;
@@ -241,7 +261,7 @@
 
       <div id="hud-center">
         <div id="altar-hp-wrap">
-          <div id="altar-hp-label">🏛️ АЛТАРЬ</div>
+          <div id="altar-hp-label">🏛️ АЛТАРЬ <span id="altar-tier">Ур.1</span></div>
           <div id="altar-hp-bg"><div id="altar-hp-fill" style="width:100%"></div></div>
         </div>
         <div id="phase-badge"><span id="phase-icon">☀️</span><span id="phase-text">День</span><span id="phase-timer">2:00</span></div>
@@ -261,6 +281,7 @@
       <div class="build-icon" id="build-wall" data-type="wall">🧱<span class="cost">5🔩</span></div>
       <div class="build-icon" id="build-turret" data-type="turret">🏹<span class="cost">12🔩 4💎</span></div>
       <div class="build-icon" id="build-beacon" data-type="beacon">🕯️<span class="cost">6💎</span></div>
+      <div class="build-icon" id="build-trap" data-type="trap">🔺<span class="cost">4🔩</span></div>
     </div>
 
     <div id="action-hint">Действие</div>
@@ -279,16 +300,32 @@
         <button class="menu-row-btn" id="menu-chat-btn">💬 Открыть чат</button>
         <button class="menu-row-btn" id="menu-sound-btn">🔊 Звук: вкл</button>
         <button class="menu-row-btn" id="menu-locate-btn">🧭 Найти ближайшего игрока</button>
+        <button class="menu-row-btn" id="menu-tutorial-btn">❓ Показать обучение</button>
         <div class="menu-section-title">Онлайн сейчас</div>
         <div id="menu-players-body"></div>
         <div class="menu-section-title">Как играть</div>
         <div id="menu-help-list">
           <div>🕹️ <b>Слева</b> — джойстик, двигайтесь</div>
-          <div>👆 <b>Кнопка снизу по центру</b> — добывать руду/кристаллы, атаковать монстров, чинить постройки</div>
-          <div>🧱🏹🕯️ <b>Иконки над кнопкой действия</b> — выбрать постройку, призрак появится у вас в ногах, подтвердите кнопкой действия</div>
+          <div>👆 <b>Кнопка снизу по центру</b> — добывать руду/кристаллы, атаковать монстров, чинить постройки, улучшать алтарь</div>
+          <div>🧱🏹🕯️🔺 <b>Иконки над кнопкой действия</b> — выбрать постройку, призрак появится у вас в ногах, подтвердите кнопкой действия</div>
           <div>🏛️ <b>Алтарь</b> — сердце базы. Если его HP дойдёт до нуля — база пала, начинаем заново</div>
           <div>🛡️ <b>Золотой купол</b> вокруг алтаря/маяков — безопасная зона, там вы лечитесь</div>
-          <div>🌙 <b>Ночью</b> волна монстров идёт к алтарю — стройте стены и турели, чтобы их перехватывать</div>
+          <div>🌙 <b>Ночью</b> волна монстров идёт к алтарю — стройте стены, турели и ловушки, чтобы их перехватывать</div>
+          <div>👹 Каждая 5-я волна — с боссом</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tutorial (first-run onboarding) -->
+    <div id="tutorial-overlay" class="modal-overlay">
+      <div class="modal-panel" id="tutorial-panel">
+        <div id="tutorial-icon">🕹️</div>
+        <div id="tutorial-title">Движение</div>
+        <div id="tutorial-text">Джойстик слева — ведите пальцем, чтобы двигаться по миру.</div>
+        <div id="tutorial-dots"></div>
+        <div id="tutorial-buttons">
+          <button id="tutorial-skip-btn">Пропустить</button>
+          <button id="tutorial-next-btn">Далее</button>
         </div>
       </div>
     </div>
@@ -333,7 +370,7 @@
         <div class="row"><div class="ico">🧱🏹🕯️</div><div>Стройте стены, турели и маяки света, расширяя безопасную зону</div></div>
         <div class="row"><div class="ico">🌙</div><div>Ночью волна теней идёт на алтарь — отбивайтесь вместе</div></div>
       </div>
-      <div id="build-tag">build: altar-td-rooms-v1</div>
+      <div id="build-tag">build: altar-td-content-v1</div>
     </div>
   </div>
 
