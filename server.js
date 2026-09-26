@@ -34,18 +34,25 @@ const DAY_LENGTH_MS = 2 * 60 * 1000;
 const NIGHT_LENGTH_MS = 1.5 * 60 * 1000;
 const CYCLE_LENGTH_MS = DAY_LENGTH_MS + NIGHT_LENGTH_MS;
 
-const BUILD_COSTS = { wall: { iron: 5 }, turret: { iron: 12, crystals: 4 }, beacon: { crystals: 6 } };
+const BUILD_COSTS = { wall: { iron: 5 }, turret: { iron: 12, crystals: 4 }, beacon: { crystals: 6 }, trap: { iron: 4 } };
 const BUILD_STATS = {
   wall: { hp: 100 },
   turret: { hp: 60, range: 230, fireRateMs: 850, damage: 2 },
-  beacon: { hp: 40, radius: 190 }
+  beacon: { hp: 40, radius: 190 },
+  trap: { hp: 25, damage: 4, radius: 44 }
 };
 const BUILD_MAX_DIST_FROM_ALTAR = 1100;
 const BUILD_MIN_SPACING = 44;
+const ALTAR_UPGRADE_COSTS = [
+  { iron: 25, crystals: 12 },
+  { iron: 50, crystals: 28 }
+];
+const ALTAR_UPGRADE_RANGE = 160;
 
 const MONSTER_TYPES = {
   hound: { hp: 3, speed: 105, damage: 5, aggroPlayers: true, coreValue: 1 },
-  rammer: { hp: 11, speed: 52, damage: 14, aggroPlayers: false, coreValue: 2 }
+  rammer: { hp: 11, speed: 52, damage: 14, aggroPlayers: false, coreValue: 2 },
+  boss: { hp: 60, speed: 40, damage: 26, aggroPlayers: true, coreValue: 8 }
 };
 const OBSTACLE_AGGRO_RANGE = 160;
 const PLAYER_AGGRO_RANGE = 130;
@@ -89,9 +96,10 @@ function createRoom(code) {
     walls: {},
     turrets: {},
     beacons: {},
+    traps: {},
     monsters: {},
     team: { iron: 0, crystals: 0, shadowCores: 0 },
-    altar: { x: CENTER_X, y: CENTER_Y, hp: 500, maxHp: 500, baseRadius: 260 },
+    altar: { x: CENTER_X, y: CENTER_Y, hp: 500, maxHp: 500, baseRadius: 260, tier: 1 },
     startTime: Date.now(), // room's own clock — every room starts fresh at DAY
     currentWave: 0,
     wasNight: false,
@@ -142,6 +150,7 @@ function anyBuildingNear(room, x, y, spacing) {
   for (const id in room.walls) if (dist(room.walls[id], { x, y }) < spacing) return true;
   for (const id in room.turrets) if (dist(room.turrets[id], { x, y }) < spacing) return true;
   for (const id in room.beacons) if (dist(room.beacons[id], { x, y }) < spacing) return true;
+  for (const id in room.traps) if (dist(room.traps[id], { x, y }) < spacing) return true;
   return false;
 }
 
@@ -167,7 +176,9 @@ function startWave(room) {
   const count = Math.min(4 + room.currentWave * 2, 40);
   const rammerChance = Math.min(0.5, 0.08 + room.currentWave * 0.03);
   for (let i = 0; i < count; i++) spawnMonsterAtEdge(room, Math.random() < rammerChance ? 'rammer' : 'hound');
-  io.to(room.code).emit('wave_start', { wave: room.currentWave, count });
+  const isBossWave = room.currentWave % 5 === 0;
+  if (isBossWave) spawnMonsterAtEdge(room, 'boss');
+  io.to(room.code).emit('wave_start', { wave: room.currentWave, count: count + (isBossWave ? 1 : 0), boss: isBossWave });
 }
 function endWave(room) {
   for (const id in room.monsters) delete room.monsters[id];
@@ -190,11 +201,15 @@ function respawnPlayer(room, p, socket) {
 }
 
 function triggerAltarFall(room) {
+  room.altar.tier = 1;
+  room.altar.maxHp = 500;
+  room.altar.baseRadius = 260;
   room.altar.hp = room.altar.maxHp;
   for (const id in room.monsters) delete room.monsters[id];
   for (const id in room.walls) delete room.walls[id];
   for (const id in room.turrets) delete room.turrets[id];
   for (const id in room.beacons) delete room.beacons[id];
+  for (const id in room.traps) delete room.traps[id];
   room.team.iron = 0; room.team.crystals = 0; room.team.shadowCores = 0;
   for (const id in room.players) {
     const p = room.players[id];
@@ -202,7 +217,7 @@ function triggerAltarFall(room) {
     p.x = room.altar.x + randInt(-120, 120);
     p.y = room.altar.y + randInt(-120, 120);
   }
-  io.to(room.code).emit('altar_destroyed', {});
+  io.to(room.code).emit('altar_destroyed', { tier: room.altar.tier, maxHp: room.altar.maxHp, baseRadius: room.altar.baseRadius });
   io.to(room.code).emit('team_resources', room.team);
 }
 
@@ -235,6 +250,7 @@ function addPlayerToRoom(socket, room, data) {
     walls: room.walls,
     turrets: room.turrets,
     beacons: room.beacons,
+    traps: room.traps,
     monsters: room.monsters,
     team: room.team,
     altar: room.altar,
@@ -334,7 +350,32 @@ io.on('connection', (socket) => {
       obj = { id: rid('beacon'), x, y, hp: BUILD_STATS.beacon.hp, maxHp: BUILD_STATS.beacon.hp, radius: BUILD_STATS.beacon.radius };
       room.beacons[obj.id] = obj;
       io.to(room.code).emit('beacon_added', obj);
+    } else if (type === 'trap') {
+      obj = { id: rid('trap'), x, y, hp: BUILD_STATS.trap.hp, maxHp: BUILD_STATS.trap.hp, damage: BUILD_STATS.trap.damage, radius: BUILD_STATS.trap.radius };
+      room.traps[obj.id] = obj;
+      io.to(room.code).emit('trap_added', obj);
     }
+    io.to(room.code).emit('team_resources', room.team);
+  });
+
+  socket.on('upgrade_altar', () => {
+    const room = getRoomOf(socket);
+    if (!room) return;
+    const p = room.players[socket.id];
+    if (!p) return;
+    if (dist(p, room.altar) > ALTAR_UPGRADE_RANGE) return;
+    const tierIdx = room.altar.tier - 1;
+    const cost = ALTAR_UPGRADE_COSTS[tierIdx];
+    if (!cost) return; // already max tier
+    for (const k in cost) if ((room.team[k] || 0) < cost[k]) return;
+    for (const k in cost) room.team[k] -= cost[k];
+
+    room.altar.tier += 1;
+    room.altar.maxHp += 250;
+    room.altar.hp = Math.min(room.altar.maxHp, room.altar.hp + 250);
+    room.altar.baseRadius += 40;
+
+    io.to(room.code).emit('altar_upgraded', { tier: room.altar.tier, maxHp: room.altar.maxHp, baseRadius: room.altar.baseRadius });
     io.to(room.code).emit('team_resources', room.team);
   });
 
@@ -343,7 +384,7 @@ io.on('connection', (socket) => {
     if (!room) return;
     const p = room.players[socket.id];
     if (!p || !data) return;
-    const map = data.kind === 'wall' ? room.walls : data.kind === 'turret' ? room.turrets : data.kind === 'beacon' ? room.beacons : null;
+    const map = data.kind === 'wall' ? room.walls : data.kind === 'turret' ? room.turrets : data.kind === 'beacon' ? room.beacons : data.kind === 'trap' ? room.traps : null;
     if (!map) return;
     const obj = map[data.id];
     if (!obj) return;
@@ -419,8 +460,24 @@ function tickRoom(room) {
 
   monsterTickRoom(room);
   turretTickRoom(room);
+  trapTickRoom(room);
 
   if (room.altar.hp <= 0) triggerAltarFall(room);
+}
+
+function trapTickRoom(room) {
+  if (!isNightNow(room)) return;
+  for (const id in room.traps) {
+    const tr = room.traps[id];
+    for (const mid in room.monsters) {
+      const m = room.monsters[mid];
+      if (dist(tr, m) <= tr.radius) {
+        m.hp -= tr.damage * DT;
+        if (m.hp <= 0) killMonster(room, m, true);
+        else io.to(room.code).emit('monster_damaged', { id: m.id, hp: m.hp });
+      }
+    }
+  }
 }
 
 function monsterTickRoom(room) {
@@ -440,6 +497,11 @@ function monsterTickRoom(room) {
       const t = room.turrets[tid];
       const d = dist(m, t);
       if (d < OBSTACLE_AGGRO_RANGE && d < bestDist) { bestDist = d; target = t; targetKind = 'turret'; }
+    }
+    for (const trid in room.traps) {
+      const tr = room.traps[trid];
+      const d = dist(m, tr);
+      if (d < OBSTACLE_AGGRO_RANGE && d < bestDist) { bestDist = d; target = tr; targetKind = 'trap'; }
     }
     if (!target && stats.aggroPlayers) {
       for (const pid in room.players) {
@@ -463,14 +525,14 @@ function monsterTickRoom(room) {
     } else {
       m.vx = 0; m.vy = 0;
       m.attacking = true;
-      if (targetKind === 'wall' || targetKind === 'turret') {
+      if (targetKind === 'wall' || targetKind === 'turret' || targetKind === 'trap') {
         target.hp = Math.max(0, target.hp - stats.damage * DT * 2);
         if (target.hp <= 0) {
-          const map = targetKind === 'wall' ? room.walls : room.turrets;
+          const map = targetKind === 'wall' ? room.walls : targetKind === 'turret' ? room.turrets : room.traps;
           delete map[target.id];
-          io.to(room.code).emit((targetKind === 'wall' ? 'wall' : 'turret') + '_removed', target.id);
+          io.to(room.code).emit(targetKind + '_removed', target.id);
         } else {
-          io.to(room.code).emit((targetKind === 'wall' ? 'wall' : 'turret') + '_updated', { id: target.id, hp: target.hp });
+          io.to(room.code).emit(targetKind + '_updated', { id: target.id, hp: target.hp });
         }
       } else if (targetKind === 'player') {
         target.health = Math.max(0, target.health - stats.damage * DT);
