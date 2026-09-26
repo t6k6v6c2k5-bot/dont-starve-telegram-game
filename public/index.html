@@ -3,14 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-<title>Don't Starve: Multiplayer</title>
+<title>Altar: Co-op Tower Defense</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; user-select: none; }
   html, body {
     width: 100%; height: 100%;
-    background: #0d0d11;
-    color: #e0d7c6;
+    background: #07070b;
+    color: #e6e0d4;
     font-family: 'Courier New', Courier, monospace;
     overflow: hidden;
     touch-action: none;
@@ -19,125 +19,102 @@
     -webkit-user-select: none;
   }
   #game-container { position: relative; width: 100vw; height: 100vh; overscroll-behavior: none; touch-action: none; }
-  canvas#gameCanvas { display: block; background: #1a1612; width: 100%; height: 100%; touch-action: none; }
+  canvas#gameCanvas { display: block; background: #0c0c14; width: 100%; height: 100%; touch-action: none; }
 
-  /* ---------- Top UI ---------- */
-  #ui-top {
-    position: absolute; top: 10px; left: 10px; right: 10px;
-    display: flex; justify-content: space-between; align-items: flex-start;
-    pointer-events: none;
+  /* ---------- Altar HP (top, prominent) ---------- */
+  #altar-hp-wrap {
+    position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+    width: min(320px, 78vw); pointer-events: none;
   }
-  .bars { display: flex; flex-direction: column; gap: 6px; min-width: 160px; }
-  .bar-row { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #d4af37; }
-  .bar-bg {
-    width: 120px; height: 10px; background: rgba(0,0,0,0.5);
-    border: 1px solid #4a3f30; border-radius: 3px; overflow: hidden;
+  #altar-hp-label { font-size: 10px; color: #d4af37; text-align: center; margin-bottom: 3px; letter-spacing: 1px; }
+  #altar-hp-bg {
+    height: 12px; background: rgba(0,0,0,0.55); border: 1px solid #4a3f30; border-radius: 4px; overflow: hidden;
   }
-  .bar-fill { height: 100%; transition: width 0.2s; }
-  #health-fill { background: #8b2c2c; }
-  #hunger-fill { background: #7c8b2c; }
+  #altar-hp-fill { height: 100%; background: linear-gradient(90deg,#d4af37,#f0d878); transition: width 0.3s; }
 
+  /* ---------- Wave / phase badge ---------- */
+  #phase-badge {
+    position: absolute; top: 42px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.5); border: 1px solid #4a3f30; border-radius: 20px;
+    padding: 4px 14px; font-size: 11px; color: #d4af37;
+    pointer-events: none; display: flex; align-items: center; gap: 8px; white-space: nowrap;
+  }
+
+  /* ---------- Personal HP (corner) ---------- */
+  #self-hp-wrap { position: absolute; top: 10px; left: 10px; pointer-events: none; }
+  #self-hp-label { font-size: 10px; color: #b8ac95; margin-bottom: 3px; }
+  #self-hp-bg { width: 90px; height: 8px; background: rgba(0,0,0,0.5); border: 1px solid #4a3f30; border-radius: 3px; overflow: hidden; }
+  #self-hp-fill { height: 100%; background: #8b2c2c; transition: width 0.2s; }
+  #zone-badge { font-size: 9px; margin-top: 3px; color: #7ca87c; display: none; }
+
+  /* ---------- Team resources ---------- */
   #resources {
+    position: absolute; top: 10px; right: 10px;
     background: rgba(0,0,0,0.45); border: 1px solid #4a3f30; border-radius: 6px;
     padding: 6px 10px; font-size: 12px; color: #d4af37; text-align: right;
-    pointer-events: auto;
-    cursor: pointer;
-  }
-
-  #clock-badge {
-    position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
-    background: rgba(0,0,0,0.45); border: 1px solid #4a3f30; border-radius: 20px;
-    padding: 4px 14px; font-size: 12px; color: #d4af37;
-    pointer-events: none; display: flex; align-items: center; gap: 6px; white-space: nowrap;
+    pointer-events: auto; cursor: pointer;
   }
 
   /* ---------- Minimap ---------- */
   #minimap-wrap {
-    position: absolute; top: 70px; right: 10px;
+    position: absolute; top: 66px; right: 10px;
     background: rgba(0,0,0,0.45); border: 1px solid #4a3f30; border-radius: 6px;
     padding: 4px; pointer-events: none;
   }
   #minimap { display: block; border-radius: 3px; }
 
-  /* ---------- Top-left icon buttons (menu / chat) ---------- */
-  #icon-buttons {
-    position: absolute; top: 10px; left: 10px;
-    display: none; /* shown once ui-top is positioned below via JS-free CSS stacking; see menu-btn/chat-btn placement */
-  }
-  .icon-btn {
-    position: absolute; width: 38px; height: 38px; border-radius: 8px;
+  /* ---------- Menu button ---------- */
+  #menu-btn {
+    position: absolute; top: 10px; left: 108px;
+    width: 34px; height: 34px; border-radius: 8px;
     background: rgba(0,0,0,0.45); border: 1px solid #4a3f30;
     color: #d4af37; font-size: 16px;
     display: flex; align-items: center; justify-content: center;
     pointer-events: auto;
   }
-  .icon-btn:active { background: rgba(212,175,55,0.25); }
-  #menu-btn { top: 74px; left: 10px; }
-  #chat-toggle-btn { top: 118px; left: 10px; }
+  #menu-btn:active { background: rgba(212,175,55,0.25); }
 
+  /* ---------- The ONE contextual action button ---------- */
   #action-hint {
-    position: absolute; left: 50%; bottom: 130px; transform: translateX(-50%);
-    background: rgba(0,0,0,0.6); border: 1px solid #d4af37; border-radius: 6px;
-    padding: 10px 18px; font-size: 13px; color: #d4af37;
-    display: none;
-    pointer-events: auto;
+    position: absolute; left: 50%; bottom: 132px; transform: translateX(-50%);
+    background: rgba(0,0,0,0.68); border: 2px solid #d4af37; border-radius: 24px;
+    padding: 12px 20px; font-size: 13px; color: #d4af37; font-weight: bold;
+    display: none; text-align: center; pointer-events: auto; max-width: 88vw;
   }
   #action-hint.visible { display: block; }
+  #action-hint.disabled { border-color: #6b6255; color: #8c8275; }
   #action-hint:active { background: rgba(212,175,55,0.25); }
 
-  #fire-panel {
-    position: absolute; left: 50%; bottom: 130px; transform: translateX(-50%);
-    display: none; gap: 8px;
+  /* ---------- Build bar ---------- */
+  #build-bar {
+    position: absolute; left: 50%; bottom: 190px; transform: translateX(-50%);
+    display: flex; gap: 8px;
   }
-  #fire-panel.visible { display: flex; }
-  #fire-panel button {
-    font-family: inherit; font-size: 12px; color: #e0d7c6;
-    background: rgba(0,0,0,0.65); border: 1px solid #d4af37; border-radius: 6px;
-    padding: 8px 12px;
+  .build-icon {
+    width: 46px; height: 46px; border-radius: 10px;
+    background: rgba(0,0,0,0.55); border: 1px solid #4a3f30;
+    color: #d4af37; font-size: 18px;
+    display: flex; align-items: center; justify-content: center;
+    pointer-events: auto; position: relative;
   }
-  #fire-panel button:active { background: rgba(212,175,55,0.25); }
-  #fire-panel button:disabled { opacity: 0.4; }
+  .build-icon.selected { border-color: #d4af37; background: rgba(212,175,55,0.25); }
+  .build-icon:active { background: rgba(212,175,55,0.3); }
+  .build-icon .cost { position: absolute; bottom: -14px; font-size: 8px; color: #8c8275; white-space: nowrap; }
 
   /* ---------- Virtual Joystick ---------- */
   #joystick-zone {
-    position: absolute; left: 24px; bottom: 24px;
-    width: 120px; height: 120px;
-    border-radius: 50%;
-    background: rgba(255,255,255,0.06);
-    border: 2px solid rgba(212,175,55,0.35);
+    position: absolute; left: 24px; bottom: 40px;
+    width: 120px; height: 120px; border-radius: 50%;
+    background: rgba(255,255,255,0.06); border: 2px solid rgba(212,175,55,0.35);
     touch-action: none;
   }
   #joystick-stick {
     position: absolute; left: 50%; top: 50%;
     width: 50px; height: 50px; margin: -25px 0 0 -25px;
-    border-radius: 50%;
-    background: rgba(212,175,55,0.55);
-    border: 2px solid #d4af37;
-    pointer-events: none;
+    border-radius: 50%; background: rgba(212,175,55,0.55);
+    border: 2px solid #d4af37; pointer-events: none;
   }
-
-  #eat-btn {
-    position: absolute; right: 24px; bottom: 24px;
-    width: 70px; height: 70px; border-radius: 50%;
-    background: rgba(124,139,44,0.35); border: 2px solid #7c8b2c;
-    color: #e0d7c6; font-size: 11px;
-    display: flex; align-items: center; justify-content: center; text-align: center;
-  }
-  #eat-btn:active { background: rgba(124,139,44,0.6); }
-
-  #sound-btn {
-    position: absolute; right: 24px; bottom: 110px;
-    width: 42px; height: 42px; border-radius: 50%;
-    background: rgba(0,0,0,0.45); border: 1px solid #4a3f30;
-    color: #d4af37; font-size: 16px;
-    display: flex; align-items: center; justify-content: center;
-  }
-  #sound-btn:active { background: rgba(212,175,55,0.25); }
-
-  .desktop-hint {
-    position: absolute; bottom: 6px; left: 50%; transform: translateX(-50%);
-    font-size: 10px; color: #6b6255; pointer-events: none; text-align: center; width: 100%;
-  }
+  #joystick-label { position: absolute; left: 24px; bottom: 16px; width: 120px; text-align: center; font-size: 9px; color: #6b6255; pointer-events: none; }
 
   /* ---------- Generic modal overlay ---------- */
   .modal-overlay {
@@ -146,192 +123,152 @@
   }
   .modal-overlay.visible { display: flex; }
   .modal-panel {
-    width: min(340px, 90vw);
-    max-height: 82vh; overflow-y: auto;
+    width: min(340px, 90vw); max-height: 82vh; overflow-y: auto;
     background: #17130f; border: 2px solid #4a3f30; border-radius: 10px;
-    padding: 16px; color: #e0d7c6;
+    padding: 16px; color: #e6e0d4;
   }
-  .modal-panel h2 {
-    font-size: 14px; color: #d4af37; margin-bottom: 10px;
-    display: flex; justify-content: space-between; align-items: center;
-  }
+  .modal-panel h2 { font-size: 14px; color: #d4af37; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
   .close-x { cursor: pointer; color: #8c8275; font-size: 16px; }
 
-  /* ---------- Inventory ---------- */
-  .inv-row {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 8px 0; border-bottom: 1px solid #2b241c; font-size: 13px;
-  }
-  .inv-row:last-child { border-bottom: none; }
-  .inv-label { display: flex; align-items: center; gap: 8px; }
-  .inv-count { color: #d4af37; }
-  #craft-section { margin-top: 14px; }
-  #craft-section .hint { font-size: 11px; color: #8c8275; margin-bottom: 8px; }
-  #craft-campfire-btn {
-    width: 100%; font-family: inherit; font-size: 13px; color: #e0d7c6;
-    background: rgba(212,175,55,0.15); border: 1px solid #d4af37; border-radius: 6px;
-    padding: 10px;
-  }
-  #craft-campfire-btn:active { background: rgba(212,175,55,0.3); }
-  #craft-campfire-btn:disabled { opacity: 0.4; }
-
-  /* ---------- Menu (pause) panel ---------- */
   #menu-players-body { font-size: 12px; color: #b8ac95; margin-bottom: 12px; }
   #menu-players-body div { padding: 3px 0; }
   .menu-row-btn {
-    width: 100%; font-family: inherit; font-size: 13px; color: #e0d7c6;
+    width: 100%; font-family: inherit; font-size: 13px; color: #e6e0d4;
     background: rgba(255,255,255,0.05); border: 1px solid #4a3f30; border-radius: 6px;
     padding: 10px; margin-top: 8px; text-align: left;
   }
   .menu-row-btn:active { background: rgba(212,175,55,0.2); }
-  #menu-help { font-size: 11px; color: #8c8275; line-height: 1.5; margin-top: 10px; }
+  .menu-section-title { font-size: 11px; color: #8c8275; margin: 14px 0 4px; }
+  #menu-help-list { font-size: 12px; color: #b8ac95; line-height: 1.7; margin-top: 4px; }
+  #menu-help-list div { padding: 3px 0; }
+  #menu-help-list b { color: #d4af37; }
 
   /* ---------- Start menu ---------- */
   #start-overlay {
     position: absolute; inset: 0; z-index: 40;
-    background: radial-gradient(circle at 50% 30%, #24201a 0%, #0d0d11 75%);
+    background: radial-gradient(circle at 50% 30%, #241f18 0%, #07070b 75%);
     display: flex; align-items: center; justify-content: center;
-    flex-direction: column; text-align: center; padding: 24px;
+    flex-direction: column; text-align: center; padding: 24px; overflow-y: auto;
   }
   #start-overlay.hidden { display: none; }
-  #start-title {
-    font-size: 22px; color: #d4af37; letter-spacing: 2px; margin-bottom: 4px;
-    text-shadow: 0 0 12px rgba(212,175,55,0.4);
-  }
-  #start-subtitle { font-size: 11px; color: #8c8275; margin-bottom: 26px; }
+  #start-title { font-size: 20px; color: #d4af37; letter-spacing: 2px; margin-bottom: 4px; text-shadow: 0 0 12px rgba(212,175,55,0.4); }
+  #start-subtitle { font-size: 11px; color: #8c8275; margin-bottom: 22px; }
   #start-name-input {
-    font-family: inherit; font-size: 14px; color: #e0d7c6;
+    font-family: inherit; font-size: 14px; color: #e6e0d4;
     background: rgba(255,255,255,0.06); border: 1px solid #4a3f30; border-radius: 6px;
     padding: 10px 14px; width: min(240px, 80vw); text-align: center; margin-bottom: 16px;
   }
   #start-play-btn {
     font-family: inherit; font-size: 15px; color: #0d0d11; font-weight: bold;
-    background: #d4af37; border: none; border-radius: 8px;
-    padding: 12px 36px; letter-spacing: 1px;
+    background: #d4af37; border: none; border-radius: 8px; padding: 12px 36px; letter-spacing: 1px;
   }
   #start-play-btn:active { background: #b8952e; }
-  #start-hint { font-size: 10px; color: #6b6255; margin-top: 22px; max-width: 280px; line-height: 1.6; }
+  #start-status { font-size: 11px; color: #8c8275; min-height: 16px; margin-top: 10px; }
+  #start-legend { margin-top: 22px; text-align: left; width: min(310px, 84vw); font-size: 12px; color: #b8ac95; line-height: 1.85; }
+  #start-legend .row { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 4px; }
+  #start-legend .row .ico { width: 20px; flex-shrink: 0; text-align: center; }
+  #build-tag { font-size: 9px; color: #4a4640; margin-top: 18px; }
 
-  /* ---------- Death overlay ---------- */
-  #death-overlay {
-    position: absolute; inset: 0; z-index: 35;
-    background: rgba(90,10,10,0.35);
+  /* ---------- Altar fallen overlay ---------- */
+  #fallen-overlay {
+    position: absolute; inset: 0; z-index: 35; background: rgba(90,10,10,0.4);
     display: none; align-items: center; justify-content: center; flex-direction: column;
   }
-  #death-overlay.visible { display: flex; }
-  #death-overlay .txt { font-size: 20px; color: #e0d7c6; text-shadow: 0 0 10px #000; }
-  #death-overlay .sub { font-size: 12px; color: #b8ac95; margin-top: 8px; }
+  #fallen-overlay.visible { display: flex; }
+  #fallen-overlay .txt { font-size: 20px; color: #e6e0d4; text-shadow: 0 0 10px #000; }
+  #fallen-overlay .sub { font-size: 12px; color: #b8ac95; margin-top: 8px; }
 
   /* ---------- Wave banner ---------- */
   #wave-banner {
-    position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%);
-    font-size: 18px; color: #e0d7c6; text-shadow: 0 0 12px #000, 0 0 4px #000;
+    position: absolute; top: 38%; left: 50%; transform: translate(-50%, -50%);
+    font-size: 18px; color: #e6e0d4; text-shadow: 0 0 12px #000, 0 0 4px #000;
     background: rgba(0,0,0,0.5); border-radius: 8px; padding: 12px 24px;
-    pointer-events: none; opacity: 0; transition: opacity 0.6s;
-    text-align: center; z-index: 25; white-space: nowrap;
+    pointer-events: none; opacity: 0; transition: opacity 0.6s; text-align: center; z-index: 25; white-space: nowrap;
   }
   #wave-banner.visible { opacity: 1; }
 
   /* ---------- Chat ---------- */
   #chat-panel {
-    position: absolute; bottom: 0; left: 0; right: 0;
-    max-height: 40vh; display: none; flex-direction: column;
-    background: rgba(0,0,0,0.55); border-top: 1px solid #4a3f30;
-    pointer-events: auto;
+    position: absolute; bottom: 0; left: 0; right: 0; max-height: 40vh;
+    display: none; flex-direction: column; background: rgba(0,0,0,0.55);
+    border-top: 1px solid #4a3f30; pointer-events: auto;
   }
   #chat-panel.visible { display: flex; }
   #chat-log { flex: 1; overflow-y: auto; padding: 8px 10px; font-size: 12px; }
-  #chat-log .msg { margin-bottom: 4px; color: #e0d7c6; }
+  #chat-log .msg { margin-bottom: 4px; color: #e6e0d4; }
   #chat-log .msg .who { color: #d4af37; }
   #chat-input-row { display: flex; gap: 6px; padding: 8px; border-top: 1px solid #2b241c; }
   #chat-input {
-    flex: 1; font-family: inherit; font-size: 13px; color: #e0d7c6;
-    background: rgba(255,255,255,0.07); border: 1px solid #4a3f30; border-radius: 6px;
-    padding: 8px 10px;
+    flex: 1; font-family: inherit; font-size: 13px; color: #e6e0d4;
+    background: rgba(255,255,255,0.07); border: 1px solid #4a3f30; border-radius: 6px; padding: 8px 10px;
   }
-  #chat-send-btn {
-    font-family: inherit; font-size: 12px; color: #0d0d11; background: #d4af37;
-    border: none; border-radius: 6px; padding: 0 14px;
-  }
+  #chat-send-btn { font-family: inherit; font-size: 12px; color: #0d0d11; background: #d4af37; border: none; border-radius: 6px; padding: 0 14px; }
+  #chat-close-btn { font-family: inherit; font-size: 12px; color: #8c8275; background: none; border: none; padding: 0 6px; }
 
-  @media (min-width: 768px) {
-    #joystick-zone, #eat-btn { opacity: 0.35; }
-  }
+  @media (min-width: 768px) { #joystick-zone { opacity: 0.35; } }
 </style>
 </head>
 <body>
   <div id="game-container">
     <canvas id="gameCanvas"></canvas>
 
-    <div id="ui-top">
-      <div class="bars">
-        <div class="bar-row">HP <div class="bar-bg"><div id="health-fill" class="bar-fill" style="width:100%"></div></div></div>
-        <div class="bar-row">Голод <div class="bar-bg"><div id="hunger-fill" class="bar-fill" style="width:100%"></div></div></div>
-        <div id="hidden-badge" style="font-size:10px; color:#7ca87c; display:none;">🌳 вы укрыты от теней</div>
-      </div>
-      <div id="resources">
-        🪵 <span id="wood-count">0</span> &nbsp; 🪨 <span id="stone-count">0</span> &nbsp; 🍖 <span id="meat-count">0</span>
-        <div style="font-size:9px; color:#8c8275; margin-top:2px;">тап — инвентарь</div>
-      </div>
+    <div id="altar-hp-wrap">
+      <div id="altar-hp-label">🏛️ АЛТАРЬ</div>
+      <div id="altar-hp-bg"><div id="altar-hp-fill" style="width:100%"></div></div>
+    </div>
+    <div id="phase-badge"><span id="phase-icon">☀️</span><span id="phase-text">День</span><span id="phase-timer">2:00</span></div>
+
+    <div id="self-hp-wrap">
+      <div id="self-hp-label">Вы</div>
+      <div id="self-hp-bg"><div id="self-hp-fill" style="width:100%"></div></div>
+      <div id="zone-badge">🛡️ безопасная зона</div>
     </div>
 
-    <div id="clock-badge"><span id="clock-icon">☀️</span><span id="clock-text">День</span><span id="day-number" style="color:#8c8275;">· День 1</span></div>
-
+    <div id="resources">
+      🔩 <span id="iron-count">0</span> &nbsp; 💎 <span id="crystal-count">0</span> &nbsp; 🌑 <span id="core-count">0</span>
+      <div style="font-size:9px; color:#8c8275; margin-top:2px;">командный запас</div>
+    </div>
     <div id="minimap-wrap"><canvas id="minimap" width="120" height="120"></canvas></div>
+    <div id="menu-btn">☰</div>
 
-    <div id="menu-btn" class="icon-btn">☰</div>
-    <div id="chat-toggle-btn" class="icon-btn">💬</div>
-
-    <div id="action-hint">Рубить</div>
-
-    <div id="fire-panel">
-      <button id="sit-btn">Сесть</button>
-      <button id="feed-btn">Подкинуть дров</button>
-    </div>
-
-    <div id="joystick-zone"><div id="joystick-stick"></div></div>
-    <div id="eat-btn">Есть</div>
-    <div id="sound-btn">🔊</div>
-
-    <div class="desktop-hint">WASD — движение | E — действие | I — инвентарь | Enter — чат</div>
-
-    <!-- Wave banner -->
     <div id="wave-banner"></div>
 
-    <!-- Inventory -->
-    <div id="inventory-overlay" class="modal-overlay">
-      <div class="modal-panel">
-        <h2>Инвентарь <span class="close-x" id="inventory-close">✕</span></h2>
-        <div class="inv-row"><div class="inv-label">🪵 Дерево</div><div class="inv-count" id="inv-wood">0</div></div>
-        <div class="inv-row"><div class="inv-label">🪨 Камень</div><div class="inv-count" id="inv-stone">0</div></div>
-        <div class="inv-row"><div class="inv-label">🍖 Мясо</div><div class="inv-count" id="inv-meat">0</div></div>
-        <div id="craft-section">
-          <div class="hint">Постройки и снаряжение</div>
-          <button id="craft-campfire-btn">🔥 Костёр (3 дерева)</button>
-          <button id="craft-spear-btn" class="menu-row-btn" style="margin-top:8px;">🗡️ Копьё (2 дерева, 1 камень)</button>
-        </div>
-      </div>
+    <div id="build-bar">
+      <div class="build-icon" id="build-wall" data-type="wall">🧱<span class="cost">5🔩</span></div>
+      <div class="build-icon" id="build-turret" data-type="turret">🏹<span class="cost">12🔩 4💎</span></div>
+      <div class="build-icon" id="build-beacon" data-type="beacon">🕯️<span class="cost">6💎</span></div>
     </div>
+
+    <div id="action-hint">Действие</div>
+
+    <div id="joystick-zone"><div id="joystick-stick"></div></div>
+    <div id="joystick-label">Движение</div>
 
     <!-- Pause / menu -->
     <div id="menu-overlay" class="modal-overlay">
       <div class="modal-panel">
         <h2>Меню <span class="close-x" id="menu-close">✕</span></h2>
-        <div style="font-size:11px; color:#8c8275; margin-bottom:4px;">Онлайн сейчас</div>
-        <div id="menu-players-body"></div>
+        <button class="menu-row-btn" id="menu-chat-btn">💬 Открыть чат</button>
         <button class="menu-row-btn" id="menu-sound-btn">🔊 Звук: вкл</button>
         <button class="menu-row-btn" id="menu-locate-btn">🧭 Найти ближайшего игрока</button>
-        <div id="menu-help">
-          <b>Управление:</b> WASD/джойстик — движение, E/подсказка — рубить, добывать, охотиться, тап по ресурсам вверху — инвентарь, 💬 — чат.<br><br>
-          <b>Выживание:</b> следите за голодом и здоровьем. Ночью держитесь у костра — тьма отнимает здоровье. Сидя у огня — лечитесь быстрее и меньше голодаете.
+        <div class="menu-section-title">Онлайн сейчас</div>
+        <div id="menu-players-body"></div>
+        <div class="menu-section-title">Как играть</div>
+        <div id="menu-help-list">
+          <div>🕹️ <b>Слева</b> — джойстик, двигайтесь</div>
+          <div>👆 <b>Кнопка снизу по центру</b> — добывать руду/кристаллы, атаковать монстров, чинить постройки</div>
+          <div>🧱🏹🕯️ <b>Иконки над кнопкой действия</b> — выбрать постройку, призрак появится у вас в ногах, подтвердите кнопкой действия</div>
+          <div>🏛️ <b>Алтарь</b> — сердце базы. Если его HP дойдёт до нуля — база пала, начинаем заново</div>
+          <div>🛡️ <b>Золотой купол</b> вокруг алтаря/маяков — безопасная зона, там вы лечитесь</div>
+          <div>🌙 <b>Ночью</b> волна монстров идёт к алтарю — стройте стены и турели, чтобы их перехватывать</div>
         </div>
       </div>
     </div>
 
-    <!-- Death overlay -->
-    <div id="death-overlay">
-      <div class="txt">Вы погибли...</div>
-      <div class="sub" id="death-sub">Возрождение у костра предков</div>
+    <!-- Altar fallen -->
+    <div id="fallen-overlay">
+      <div class="txt">Алтарь пал...</div>
+      <div class="sub">База возрождается. Начинаем заново.</div>
     </div>
 
     <!-- Chat -->
@@ -340,20 +277,25 @@
       <div id="chat-input-row">
         <input id="chat-input" type="text" maxlength="140" placeholder="Написать в чат...">
         <button id="chat-send-btn">➤</button>
+        <button id="chat-close-btn">✕</button>
       </div>
     </div>
 
     <!-- Start menu -->
     <div id="start-overlay">
-      <div id="start-title">DON'T STARVE: MULTIPLAYER</div>
-      <div id="start-subtitle">готический выживач &middot; кооператив в реальном времени</div>
+      <div id="start-title">ALTAR: CO-OP TOWER DEFENSE</div>
+      <div id="start-subtitle">оборона базы &middot; кооператив в реальном времени</div>
       <input id="start-name-input" type="text" maxlength="24" placeholder="Ваше имя (необязательно)">
       <button id="start-play-btn">Играть</button>
-      <div id="start-status" style="font-size:11px; color:#8c8275; min-height:16px; margin-top:10px;"></div>
-      <div id="start-hint">
-        Рубите деревья, добывайте камень, охотьтесь на кроликов. Стройте костёр — ночью тьма опасна. Находите других игроков на миникарте и общайтесь в чате.
+      <div id="start-status"></div>
+      <div id="start-legend">
+        <div class="row"><div class="ico">🏛️</div><div>Защищайте Алтарь — если его HP дойдёт до нуля, база падёт</div></div>
+        <div class="row"><div class="ico">⛏️</div><div>Добывайте железо и кристаллы света в диких землях за куполом</div></div>
+        <div class="row"><div class="ico">🧱🏹🕯️</div><div>Стройте стены, турели и маяки света, расширяя безопасную зону</div></div>
+        <div class="row"><div class="ico">🌙</div><div>Ночью волна теней идёт на алтарь — отбивайтесь вместе</div></div>
+        <div class="row"><div class="ico">🌑</div><div>Убитые монстры оставляют ядра тени — тоже ресурс команды</div></div>
       </div>
-      <div id="build-tag" style="font-size:9px; color:#4a4640; margin-top:14px;">build: tdz-fix-v1</div>
+      <div id="build-tag">build: altar-td-v1</div>
     </div>
   </div>
 
