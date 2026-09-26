@@ -81,21 +81,26 @@ let altar = { x: 1700, y: 1700, hp: 500, maxHp: 500, baseRadius: 260 };
 let wave = 0;
 let phase = { phase: 'day', frac: 0, msLeft: 120000 };
 let hasJoined = false;
+let roomCode = null;
 const particles = [];
 const projectiles = [];
 
-function joinGame(name) {
+function joinGame(name, mode, code) {
   if (hasJoined) return;
   hasJoined = true;
   setStartStatus('Подключение...');
-  socket.emit('join', { userId: myUserId, name: name || myName });
+  if (mode === 'join') {
+    socket.emit('join_room', { userId: myUserId, name: name || myName, code });
+  } else {
+    socket.emit('create_room', { userId: myUserId, name: name || myName });
+  }
   clearTimeout(joinTimeoutHandle);
   joinTimeoutHandle = setTimeout(() => {
     if (selfId === null) {
       setStartStatus('Не удалось подключиться к серверу. Проверьте соединение и нажмите ещё раз.', true);
       hasJoined = false;
       startOverlayEl.classList.remove('hidden');
-      startPlayBtn.disabled = false;
+      setStartButtonsEnabled(true);
     }
   }, 7000);
 }
@@ -104,12 +109,18 @@ let joinTimeoutHandle = null;
 socket.on('connect', () => setStartStatus(''));
 socket.on('connect_error', () => setStartStatus('Ошибка подключения к серверу...', true));
 socket.on('disconnect', () => setStartStatus('Соединение потеряно. Переподключение...', true));
+socket.on('join_error', (data) => {
+  hasJoined = false;
+  setStartStatus((data && data.message) || 'Не удалось войти в комнату.', true);
+  setStartButtonsEnabled(true);
+});
 
 function initRenderPos(o) { o.renderX = o.x; o.renderY = o.y; }
 
 socket.on('init', (data) => {
   clearTimeout(joinTimeoutHandle);
   selfId = data.selfId;
+  roomCode = data.roomCode || null;
   world = data.world;
   players = data.players;
   resourceNodes = data.resourceNodes || {};
@@ -126,6 +137,7 @@ socket.on('init', (data) => {
   Object.values(monsters).forEach(initRenderPos);
   setStartStatus('');
   startOverlayEl.classList.add('hidden');
+  updateRoomCodeUI();
   updatePlayersListUI();
   updateResourcesUI();
 });
@@ -415,25 +427,73 @@ function toggleSound() {
 // ==================== START MENU ====================
 const startOverlayEl = document.getElementById('start-overlay');
 const startNameInput = document.getElementById('start-name-input');
-const startPlayBtn = document.getElementById('start-play-btn');
+const startCreateBtn = document.getElementById('start-create-btn');
+const startJoinBtn = document.getElementById('start-join-btn');
+const startJoinRow = document.getElementById('start-join-row');
+const startModeButtons = document.getElementById('start-mode-buttons');
+const startCodeInput = document.getElementById('start-code-input');
+const startJoinConfirmBtn = document.getElementById('start-join-confirm-btn');
+const startJoinBackBtn = document.getElementById('start-join-back-btn');
 const startStatusEl = document.getElementById('start-status');
+let pendingMode = null; // 'create' | 'join' — remembered so we can show the right post-join banner
 
 function setStartStatus(text, isError) {
   if (!startStatusEl) return;
   startStatusEl.textContent = text || '';
   startStatusEl.style.color = isError ? '#e07a5f' : '#8c8275';
 }
+function setStartButtonsEnabled(enabled) {
+  startCreateBtn.disabled = !enabled;
+  startJoinConfirmBtn.disabled = !enabled;
+}
 if (tgUser && tgUser.name) { startNameInput.value = tgUser.name; startNameInput.disabled = true; }
 else { startNameInput.value = myName; }
 
-function startGame() {
+// A friend can share a link like ?code=ABCDE (or a Telegram startapp param) and
+// the code field pre-fills, jumping straight to the join view.
+(function prefillRoomCodeFromLink() {
+  let codeFromLink = null;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    codeFromLink = params.get('code');
+    if (!codeFromLink && window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initDataUnsafe) {
+      codeFromLink = window.Telegram.WebApp.initDataUnsafe.start_param || null;
+    }
+  } catch (e) {}
+  if (codeFromLink) {
+    startCodeInput.value = codeFromLink.toUpperCase().slice(0, 5);
+    startModeButtons.style.display = 'none';
+    startJoinRow.style.display = 'flex';
+  }
+})();
+
+function startGame(mode) {
   ensureAudio();
-  startPlayBtn.disabled = true;
+  pendingMode = mode;
+  setStartButtonsEnabled(false);
   const chosenName = startNameInput.value.trim().slice(0, 24) || myName;
-  joinGame(chosenName);
+  if (mode === 'join') {
+    const code = startCodeInput.value.trim().toUpperCase();
+    if (!code) { setStartStatus('Введите код комнаты', true); setStartButtonsEnabled(true); return; }
+    joinGame(chosenName, 'join', code);
+  } else {
+    joinGame(chosenName, 'create');
+  }
 }
-startPlayBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); startGame(); });
-startNameInput.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.code === 'Enter') startGame(); });
+startCreateBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); startGame('create'); });
+startJoinBtn.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  startModeButtons.style.display = 'none';
+  startJoinRow.style.display = 'flex';
+});
+startJoinBackBtn.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  startJoinRow.style.display = 'none';
+  startModeButtons.style.display = 'flex';
+});
+startJoinConfirmBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); startGame('join'); });
+startNameInput.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.code === 'Enter') startGame('create'); });
+startCodeInput.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.code === 'Enter') startGame('join'); });
 
 // ==================== FALLEN OVERLAY ====================
 const fallenOverlayEl = document.getElementById('fallen-overlay');
@@ -452,6 +512,28 @@ function showWaveBanner(text, color) {
   waveBannerEl.classList.add('visible');
   clearTimeout(waveBannerHideTimer);
   waveBannerHideTimer = setTimeout(() => waveBannerEl.classList.remove('visible'), 4200);
+}
+
+// ==================== ROOM CODE DISPLAY ====================
+const menuRoomCodeEl = document.getElementById('menu-room-code');
+const menuCopyCodeBtn = document.getElementById('menu-copy-code-btn');
+function updateRoomCodeUI() {
+  if (menuRoomCodeEl) menuRoomCodeEl.textContent = roomCode || '—';
+  if (pendingMode === 'create' && roomCode) {
+    showWaveBanner(`Комната создана: ${roomCode} — поделитесь кодом с другом!`, '#d4af37');
+  }
+}
+if (menuCopyCodeBtn) {
+  menuCopyCodeBtn.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    if (!roomCode) return;
+    const text = roomCode;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch(() => {});
+    }
+    menuCopyCodeBtn.textContent = 'Скопировано!';
+    setTimeout(() => { menuCopyCodeBtn.textContent = 'Скопировать код'; }, 1500);
+  });
 }
 
 // ==================== PAUSE / MENU PANEL ====================
@@ -852,32 +934,65 @@ function drawAltar() {
   ctx.save();
   ctx.translate(sx, sy);
 
-  const glowR = 130 * pulse;
-  const grad = ctx.createRadialGradient(0, 0, 10, 0, 0, glowR);
-  grad.addColorStop(0, 'rgba(255,220,140,0.55)');
+  const glowR = 140 * pulse;
+  const grad = ctx.createRadialGradient(0, -10, 10, 0, -10, glowR);
+  grad.addColorStop(0, 'rgba(255,220,140,0.5)');
   grad.addColorStop(1, 'rgba(255,220,140,0)');
   ctx.fillStyle = grad;
-  ctx.beginPath(); ctx.arc(0, 0, glowR, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(0, -10, glowR, 0, Math.PI * 2); ctx.fill();
 
-  ctx.beginPath(); ctx.ellipse(0, 30, 60, 16, 0, 0, Math.PI * 2);
+  ctx.beginPath(); ctx.ellipse(0, 34, 68, 17, 0, 0, Math.PI * 2);
   ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.fill();
 
-  ctx.fillStyle = '#3a3040';
-  ctx.strokeStyle = '#17111f';
-  ctx.lineWidth = 3;
+  // wide stone base platform (bottom tier)
+  ctx.fillStyle = '#332c3d'; ctx.strokeStyle = '#15111c'; ctx.lineWidth = 2.5;
   ctx.beginPath();
-  ctx.moveTo(-45, 30); ctx.lineTo(-30, -10); ctx.lineTo(30, -10); ctx.lineTo(45, 30);
+  ctx.moveTo(-58, 30); ctx.lineTo(-48, 14); ctx.lineTo(48, 14); ctx.lineTo(58, 30);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 1;
+  for (let i = -40; i <= 40; i += 16) { ctx.beginPath(); ctx.moveTo(i, 30); ctx.lineTo(i * 0.83, 15); ctx.stroke(); }
+
+  // middle tier
+  ctx.fillStyle = '#3c3448'; ctx.strokeStyle = '#15111c'; ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.moveTo(-40, 14); ctx.lineTo(-30, -8); ctx.lineTo(30, -8); ctx.lineTo(40, 14);
   ctx.closePath(); ctx.fill(); ctx.stroke();
 
-  ctx.fillStyle = '#4a3f56';
-  ctx.beginPath(); ctx.moveTo(-25, -10); ctx.lineTo(-15, -45); ctx.lineTo(15, -45); ctx.lineTo(25, -10); ctx.closePath();
+  // upper tier / spire
+  ctx.fillStyle = '#4a4058';
+  ctx.beginPath(); ctx.moveTo(-24, -8); ctx.lineTo(-13, -44); ctx.lineTo(13, -44); ctx.lineTo(24, -8); ctx.closePath();
   ctx.fill(); ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, -8); ctx.lineTo(0, -44); ctx.stroke();
 
-  ctx.fillStyle = `rgba(255,215,120,${0.7 * pulse + 0.3})`;
-  ctx.beginPath(); ctx.arc(0, -50, 9, 0, Math.PI * 2); ctx.fill();
-  ctx.strokeStyle = 'rgba(255,235,180,0.8)';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath(); ctx.arc(0, -50, 13 * pulse, 0, Math.PI * 2); ctx.stroke();
+  // flanking torch pillars
+  for (const side of [-1, 1]) {
+    const px = side * 46, py = 22;
+    ctx.fillStyle = '#2c2636'; ctx.strokeStyle = '#15111c'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.rect(px - 4, py - 26, 8, 26); ctx.fill(); ctx.stroke();
+    const flicker = Math.sin(now * 0.015 + side) * 1.5;
+    ctx.fillStyle = '#ffcf5c';
+    ctx.beginPath();
+    ctx.moveTo(px, py - 26);
+    ctx.quadraticCurveTo(px + 5 + flicker, py - 34, px, py - 44 + flicker);
+    ctx.quadraticCurveTo(px - 5 - flicker, py - 34, px, py - 26);
+    ctx.closePath(); ctx.fill();
+  }
+
+  // floating glowing core at the top
+  ctx.fillStyle = `rgba(255,225,150,${0.75 * pulse + 0.25})`;
+  ctx.beginPath(); ctx.arc(0, -54, 10, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,240,190,0.85)'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.arc(0, -54, 14 * pulse, 0, Math.PI * 2); ctx.stroke();
+  for (let i = 0; i < 4; i++) {
+    const ang = (i / 4) * Math.PI * 2 + now * 0.0006;
+    ctx.strokeStyle = `rgba(255,235,180,${0.3 * pulse})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(ang) * 16, -54 + Math.sin(ang) * 16);
+    ctx.lineTo(Math.cos(ang) * 24, -54 + Math.sin(ang) * 24);
+    ctx.stroke();
+  }
 
   ctx.restore();
 }
@@ -1003,45 +1118,68 @@ function drawBeacon(b) {
 function drawMonster(m) {
   const sx = m.renderX - camera.x, sy = m.renderY - camera.y;
   const isRammer = m.type === 'rammer';
-  const scale = isRammer ? 1.5 : 1;
-  ctx.save(); ctx.translate(sx, sy); ctx.scale(scale, scale);
+  ctx.save(); ctx.translate(sx, sy);
 
   const now = performance.now();
-  const bob = Math.sin(now * (isRammer ? 0.004 : 0.008)) * 2;
+  const bob = Math.sin(now * (isRammer ? 0.004 : 0.01)) * (isRammer ? 1.5 : 2.5);
   const jitter = m.attacking ? Math.sin(now * 0.05) * 2 : 0;
 
-  ctx.beginPath(); ctx.ellipse(0, 3, 13, 5, 0, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fill();
-
-  ctx.fillStyle = isRammer ? 'rgba(35,15,15,0.94)' : 'rgba(20,10,30,0.92)';
-  ctx.strokeStyle = isRammer ? 'rgba(200,80,50,0.7)' : 'rgba(107,47,179,0.7)';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.moveTo(-11 + jitter, 2 + bob);
-  ctx.quadraticCurveTo(-14, -14 + bob, -5, -26 + bob);
-  ctx.quadraticCurveTo(0, -32 + bob, 5, -26 + bob);
-  ctx.quadraticCurveTo(14, -14 + bob, 11 - jitter, 2 + bob);
-  ctx.quadraticCurveTo(4, -4 + bob, 0, 2 + bob);
-  ctx.quadraticCurveTo(-4, -4 + bob, -11 + jitter, 2 + bob);
-  ctx.closePath(); ctx.fill(); ctx.stroke();
-
   if (isRammer) {
-    ctx.strokeStyle = 'rgba(200,80,50,0.8)'; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(-6, -24 + bob); ctx.lineTo(-10, -34 + bob); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(6, -24 + bob); ctx.lineTo(10, -34 + bob); ctx.stroke();
+    // ---- RAMMER: bulky armored brute ----
+    ctx.beginPath(); ctx.ellipse(0, 6, 22, 8, 0, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fill();
+
+    ctx.fillStyle = '#241412'; ctx.strokeStyle = 'rgba(200,80,50,0.75)'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(-20, 4 + bob); ctx.lineTo(-24, -14 + bob); ctx.lineTo(-12, -30 + bob);
+    ctx.lineTo(12, -30 + bob); ctx.lineTo(24, -14 + bob); ctx.lineTo(20, 4 + bob);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+
+    ctx.strokeStyle = 'rgba(120,50,40,0.7)'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(-20, -6 + bob); ctx.lineTo(20, -6 + bob); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-18, -18 + bob); ctx.lineTo(18, -18 + bob); ctx.stroke();
+
+    ctx.strokeStyle = 'rgba(220,100,60,0.9)'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(-10, -28 + bob); ctx.lineTo(-18, -40 + bob); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(10, -28 + bob); ctx.lineTo(18, -40 + bob); ctx.stroke();
+
+    const eyeColor = m.attacking ? '#ff3b3b' : '#ff9b3b';
+    ctx.fillStyle = eyeColor; ctx.shadowColor = eyeColor; ctx.shadowBlur = 7;
+    ctx.beginPath(); ctx.arc(-7, -20 + bob, 2.2, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(7, -20 + bob, 2.2, 0, Math.PI * 2); ctx.fill();
+    ctx.shadowBlur = 0;
+  } else {
+    // ---- HOUND: low, sleek, fast ----
+    ctx.beginPath(); ctx.ellipse(0, 4, 15, 5, 0, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fill();
+
+    ctx.fillStyle = 'rgba(18,9,26,0.93)'; ctx.strokeStyle = 'rgba(140,70,220,0.7)'; ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(-16 + jitter, 2);
+    ctx.quadraticCurveTo(-18, -10, -6, -14);
+    ctx.quadraticCurveTo(6, -17, 14, -10);
+    ctx.quadraticCurveTo(18, -4, 16 - jitter, 2);
+    ctx.quadraticCurveTo(0, 6, -16 + jitter, 2);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+
+    ctx.beginPath(); ctx.moveTo(-8, -13); ctx.lineTo(-11, -22); ctx.lineTo(-3, -15); ctx.closePath();
+    ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(8, -13); ctx.lineTo(11, -22); ctx.lineTo(3, -15); ctx.closePath();
+    ctx.fill(); ctx.stroke();
+
+    const eyeColor = m.attacking ? '#ff3b3b' : '#c98bff';
+    ctx.fillStyle = eyeColor; ctx.shadowColor = eyeColor; ctx.shadowBlur = 6;
+    ctx.beginPath(); ctx.arc(10, -9, 1.6, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(4, -6, 1.4, 0, Math.PI * 2); ctx.fill();
+    ctx.shadowBlur = 0;
   }
 
-  const eyeColor = m.attacking ? '#ff3b3b' : (isRammer ? '#ff9b3b' : '#c98bff');
-  ctx.fillStyle = eyeColor; ctx.shadowColor = eyeColor; ctx.shadowBlur = 6;
-  ctx.beginPath(); ctx.arc(-4, -20 + bob, 1.8, 0, Math.PI * 2); ctx.fill();
-  ctx.beginPath(); ctx.arc(4, -20 + bob, 1.8, 0, Math.PI * 2); ctx.fill();
-  ctx.shadowBlur = 0;
   ctx.restore();
 
   if (m.hp < m.maxHp) {
-    const w = 26 * scale, frac = Math.max(0, m.hp / m.maxHp);
-    ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(sx - w / 2, sy - 40 * scale, w, 4);
-    ctx.fillStyle = '#8b2c2c'; ctx.fillRect(sx - w / 2, sy - 40 * scale, w * frac, 4);
+    const w = isRammer ? 34 : 26, frac = Math.max(0, m.hp / m.maxHp), barY = isRammer ? 44 : 26;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(sx - w / 2, sy - barY, w, 4);
+    ctx.fillStyle = '#8b2c2c'; ctx.fillRect(sx - w / 2, sy - barY, w * frac, 4);
   }
 }
 
@@ -1147,7 +1285,7 @@ const stars = [];
 for (let i = 0; i < 80; i++) stars.push({ x: Math.random(), y: Math.random(), phase: Math.random() * Math.PI * 2, speed: 0.4 + Math.random() * 1.4 });
 
 function drawDomeOverlay() {
-  const wildAlpha = phase.phase === 'night' ? 0.8 : 0.46;
+  const wildAlpha = phase.phase === 'night' ? 0.78 : 0.22;
 
   nightCtx.clearRect(0, 0, nightCanvas.width, nightCanvas.height);
   nightCtx.fillStyle = `rgba(10,8,22,${wildAlpha})`;
