@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "freelancehunt": {
+      "command": "npx",
+      "args": ["-y", "freelancehunt-mcp"],
+      "env": {
+        "FREELANCEHUNT_TOKEN": "${FREELANCEHUNT_TOKEN}",
+        "FREELANCEHUNT_LANG": "uk"
+      }
+    }
+  }
+}
