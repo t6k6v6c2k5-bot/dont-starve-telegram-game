@@ -104,6 +104,18 @@ def title_layer(text):
         yy0 += 100
     return lay
 TL = title_layer(title) if title else None
+
+# pop-up option cards: {"text": "1 — ПОДВАЛ", "t": 26, "end": 31, "x": 540, "y": 700, "color": [r,g,b]}
+cfont = ImageFont.truetype("/usr/share/fonts/opentype/inter/Inter-Bold.otf", 64)
+CARDS = []
+for c in cfg.get("cards", []):
+    tw = int(ImageDraw.Draw(Image.new("RGBA", (1, 1))).textlength(c["text"], font=cfont))
+    img = Image.new("RGBA", (tw + 90, 120), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle((4, 4, img.width - 4, img.height - 4), radius=40, fill=tuple(c.get("color", [255, 221, 51])) + (240,),
+                        outline=(0, 0, 0, 255), width=6)
+    d.text((45, 22), c["text"], font=cfont, fill=(20, 20, 20))
+    CARDS.append(dict(c, img=img))
 TITLE_T = cfg.get("title_dur", 2.2)
 
 # water drops
@@ -145,6 +157,13 @@ for i in range(N):
             alpha = lay.getchannel("A").point(lambda v: int(v * (TITLE_T - t) / 0.25))
             lay.putalpha(alpha)
         fr.alpha_composite(lay, ((W - lay.width) // 2, 230 - (lay.height - TL.height) // 2))
+    for card in CARDS:
+        if card["t"] <= t < card["end"]:
+            k = min(1, (t - card["t"]) / 0.3)
+            s = (0.3 + 0.7 * k) * (1 + 0.18 * math.sin(k * math.pi)) if k < 1 else 1 + 0.03 * math.sin((t - card["t"]) * 7)
+            im = card["img"]
+            lay = im.resize((max(1, int(im.width * s)), max(1, int(im.height * s))), Image.BICUBIC)
+            fr.alpha_composite(lay, (int(card["x"] - lay.width / 2), int(card["y"] - lay.height / 2)))
     ff.stdin.write(fr.convert("RGB").tobytes())
 ff.stdin.close(); ff.wait()
 
