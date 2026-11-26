@@ -1,0 +1,21 @@
+{"title": "ОБЛИТЬ ПРОХОЖЕГО?\nЗДЕСЬ — МОЖНО!", "title_dur": 2.3, "tail": 0.6, "music_vol": 0.13,
+ "shots": [
+  {"img": "s01.png", "start": 0.0,  "end": 2.4,  "move": "tilt_down"},
+  {"img": "s02.png", "start": 2.4,  "end": 5.7,  "move": "crash", "flash": [2.4], "shake": [[2.4, 2.85, 22]], "punch": [4.88]},
+  {"img": "s03.png", "start": 5.7,  "end": 8.9,  "move": "push", "punch": [6.72]},
+  {"img": "s04.png", "start": 8.9,  "end": 11.6, "move": "pan_r", "punch": [11.2]},
+  {"img": "s05.png", "start": 11.6, "end": 13.6, "move": "crash", "shake": [[11.6, 12.1, 18]], "punch": [12.32]},
+  {"img": "s06.png", "start": 13.6, "end": 15.7, "move": "push", "punch": [14.64]},
+  {"img": "s07.png", "start": 15.7, "end": 19.6, "move": "pull"},
+  {"img": "s08.png", "start": 19.6, "end": 22.75, "move": "push", "flash": [21.5], "shake": [[21.5, 22.1, 26]], "punch": [21.5]},
+  {"img": "s09.png", "start": 22.75, "end": 24.4, "move": "push", "punch": [23.44]},
+  {"img": "s10.png", "start": 24.4, "end": 99, "move": "push_slow"}
+ ],
+ "sfx": [
+  {"file": "sfx_whoosh.mp3", "t": 2.3, "vol": 0.35}, {"file": "sfx_waves.mp3", "t": 2.4, "vol": 0.8},
+  {"file": "sfx_whoosh.mp3", "t": 5.6, "vol": 0.3}, {"file": "sfx_whoosh.mp3", "t": 8.8, "vol": 0.3},
+  {"file": "sfx_whoosh.mp3", "t": 11.5, "vol": 0.35}, {"file": "sfx_whoosh.mp3", "t": 13.5, "vol": 0.3},
+  {"file": "sfx_shimmer.mp3", "t": 15.7, "vol": 0.5}, {"file": "sfx_whoosh.mp3", "t": 19.5, "vol": 0.3},
+  {"file": "sfx_waves.mp3", "t": 21.45, "vol": 0.95}, {"file": "sfx_whoosh.mp3", "t": 22.65, "vol": 0.3},
+  {"file": "sfx_ding.mp3", "t": 24.45, "vol": 0.6}
+ ]}
