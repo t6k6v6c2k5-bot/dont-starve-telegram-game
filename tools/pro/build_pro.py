@@ -24,7 +24,7 @@ shots.json keys
 """
 import json, math, os, re, subprocess, sys
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 D = sys.argv[1]
 p = lambda n: os.path.join(D, n)
@@ -98,8 +98,8 @@ def camera(shot, t):
     for pt in shot.get("punch", []):
         if 0 <= t - pt < 0.35:
             z *= 1 + 0.07 * math.exp(-(t - pt) * 12)
-    if t - a < 0.12 and not shot.get("nocutin"):
-        z *= 1 + 0.05 * (1 - (t - a) / 0.12)
+    if t - a < 0.3 and not shot.get("nocutin"):
+        z *= 1 + 0.06 * 2 ** (-10 * (t - a) / 0.3)
     for t0, t1, amp in shot.get("shake", []):
         if t0 <= t <= t1:
             fall = 1 - (t - t0) / max(0.01, t1 - t0)
@@ -130,20 +130,21 @@ topfade.putalpha(Image.fromarray(tf.astype(np.uint8)))
 FONT_XB = "/usr/share/fonts/opentype/inter/Inter-ExtraBold.otf"
 FONT_B = "/usr/share/fonts/opentype/inter/Inter-Bold.otf"
 font = ImageFont.truetype(FONT_XB if os.path.exists(FONT_XB) else FONT_B, cfg.get("title_size", 80))
-def title_layer(text):
-    lines = text.split("\n")
-    lay = Image.new("RGBA", (W, 420), (0, 0, 0, 0))
-    d = ImageDraw.Draw(lay)
+def title_lines(text):
+    out = []
     y0 = 30
-    for ln in lines:
+    for ln in text.split("\n"):
+        lay = Image.new("RGBA", (W, 420), (0, 0, 0, 0))
+        d = ImageDraw.Draw(lay)
         w = d.textlength(ln, font=font)
         d.text(((W - w) / 2, y0), ln, font=font, fill=(255, 221, 51), stroke_width=10, stroke_fill=(0, 0, 0))
+        out.append(lay)
         y0 += int(cfg.get("title_size", 80) * 1.25)
-    return lay
+    return out
 title = cfg.get("title")
-TL = title_layer(title) if title else None
+TL = title_lines(title) if title else None
 TITLE_T = cfg.get("title_dur", 2.2)
-TITLE_Y = cfg.get("title_y", 230)
+TITLE_Y = cfg.get("title_y", 290)
 
 cfont = ImageFont.truetype(FONT_B, cfg.get("card_size", 64))
 CARDS = []
@@ -170,6 +171,9 @@ for i in range(N):
     t = i / FPS
     shot = next(s for s in shots if s["start"] <= t < s["end"] or s is shots[-1])
     fr = render_shot(shot, t).convert("RGBA")
+    if shot.get("whip") and t - shot["start"] < 0.16:
+        k = 1 - (t - shot["start"]) / 0.16
+        fr = fr.resize((max(6, int(W / (1 + 60 * k * k))), H), Image.BILINEAR).resize((W, H), Image.BILINEAR)
     fr.alpha_composite(vig_rgba)
     if shot.get("topfade"):
         fr.alpha_composite(topfade)
@@ -191,17 +195,24 @@ for i in range(N):
         if 0 <= t - fl < 0.18:
             fr.alpha_composite(Image.new("RGBA", (W, H), (255, 255, 255, int(220 * (1 - (t - fl) / 0.18)))))
     if TL is not None and t < TITLE_T:
-        k = min(1, t / 0.35)
-        s = 0.4 + 0.6 * (1 + 0.25 * math.sin(k * math.pi)) * k if k < 1 else 1 + 0.02 * math.sin(t * 9)
-        lay = TL.resize((max(1, int(TL.width * s)), max(1, int(TL.height * s))), Image.BICUBIC)
-        lay = lay.rotate(2.5 * math.sin(t * 5), resample=Image.BICUBIC)
-        if t > TITLE_T - 0.25:
-            lay.putalpha(lay.getchannel("A").point(lambda v: int(v * (TITLE_T - t) / 0.25)))
-        fr.alpha_composite(lay, ((W - lay.width) // 2, TITLE_Y - (lay.height - TL.height) // 2))
+        for li, lay0 in enumerate(TL):
+            k = min(1, max(0, (t - li * 0.1) / 0.2))          # blur-in, lines 0.1 s apart
+            blur, alpha = 14 * (1 - k), 0.55 + 0.45 * k
+            if li > 0 and t < li * 0.1:
+                alpha = 0
+            if t > TITLE_T - 0.2:                               # exit: blur-out and fade, shorter than the entrance
+                q = (TITLE_T - t) / 0.2
+                blur, alpha = 10 * (1 - q), q
+            if alpha <= 0:
+                continue
+            lay = lay0.filter(ImageFilter.GaussianBlur(blur)) if blur > 0.3 else lay0
+            if alpha < 1:
+                lay = lay.copy(); lay.putalpha(lay.getchannel("A").point(lambda v: int(v * alpha)))
+            fr.alpha_composite(lay, (0, TITLE_Y))
     for card in CARDS:
         if card["t"] <= t < card["end"]:
             k = min(1, (t - card["t"]) / 0.3)
-            s = (0.3 + 0.7 * k) * (1 + 0.18 * math.sin(k * math.pi)) if k < 1 else 1 + 0.03 * math.sin((t - card["t"]) * 7)
+            s = (0.3 + 0.7 * k) * (1 + 0.18 * math.sin(k * math.pi)) if k < 1 else 1
             im = card["img"]
             lay = im.resize((max(1, int(im.width * s)), max(1, int(im.height * s))), Image.BICUBIC)
             fr.alpha_composite(lay, (int(card["x"] - lay.width / 2), int(card["y"] - lay.height / 2)))
