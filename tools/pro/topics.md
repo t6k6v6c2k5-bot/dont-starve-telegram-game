@@ -1,0 +1,58 @@
+# Темы, которые уже были (не повторять)
+
+- ep10-capybara-onsen
+- ep11-dolphin-names
+- ep12-rats-laugh
+- ep13-cat-stationmaster
+- ep14-holding-hands-pain
+- ep15-friends-laughter
+- ep16-emu-war
+- ep17-turin-dog-walks
+- ep18-kitkat-japan
+- ep19-gavle-goat
+- ep2-onion-tears
+- ep20-singapore-gum
+- ep21-penguin-general
+- ep22-do-nothing-man
+- ep23-friends-brains
+- ep24-cat-names
+- ep25-puppy-eyes
+- ep26-la-paz-zebras
+- ep27-wombat-cubes
+- ep28-rabbit-island
+- ep29-dog-yawns
+- ep3-black-hole
+- ep30-woolly-sheep
+- ep31-nz-wizard
+- ep32-wrinkly-fingers
+- ep33-mom-voice
+- ep34-friendship-hours
+- ep35-crows-grudge
+- ep36-black-day
+- ep37-denmark-cinnamon
+- ep38-elephants-console
+- ep39-hugs-cold
+- ep4-swiss-guinea-pigs
+- ep40-armenia-vardavar
+- ep41-kazakh-tusau-kesu
+- ep42-ukraine-rushnyk
+- ep43-horror-house-ep1-loud
+- ep43-horror-house-ep1
+- ep44-midnight-train-ep1-loud
+- ep44-midnight-train-ep1
+- ep45-night-lesson-ep1
+- ep46-georgia-wine-8000
+- ep47-hearts-in-sync
+- ep5-banana-curve
+- ep6-german-escape
+- ep7-swiss-lobsters
+- ep8-cow-best-friends
+- ep9-otters-holding-paws
+- pin-kapi-intro
+- test-ep40-armenia-3d-style
+- test-kapi-anim-armenia
+- yawn-contagion (пользователь отклонил тему про зевоту)
+
+# Очередь идей
+- Узбекистан, Беларусь, татары, Молдова, Азербайджан, Кыргызстан (серия про народы и страны)
+- факты про отношения, дружбу, семью, в которых зритель узнаёт себя
