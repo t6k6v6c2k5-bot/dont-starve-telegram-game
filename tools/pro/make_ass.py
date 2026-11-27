@@ -35,7 +35,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
 out = [hdr]
 for i, c in enumerate(chunks):
-    start = c[0]["start"]
+    start = 0.0 if i == 0 else c[0]["start"]   # first chunk visible from frame 0 -> readable cover
     end = chunks[i+1][0]["start"] if i+1 < len(chunks) and chunks[i+1][0]["start"] - c[-1]["end"] < 0.5 else c[-1]["end"] + 0.15
     HL = set(x.upper() for x in sys.argv[3].split(",")) if len(sys.argv) > 3 else set()
     text = " ".join(("{\\1c&H33DDFF&}" + w["text"].upper() + "{\\1c&HFFFFFF&}") if w["text"].upper().strip(".,!?…:«»") in HL else w["text"].upper() for w in c).replace("\n", " ")
