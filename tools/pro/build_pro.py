@@ -157,6 +157,25 @@ for c in cfg.get("cards", []):
     d.text((45, 22), c["text"], font=cfont, fill=(20, 20, 20))
     CARDS.append(dict(c, img=img))
 
+# rolling number counters: {"t": 2.0, "end": 5.0, "from": 0, "to": 240000, "x": 540, "y": 520, "suffix": "", "dur": 1.2}
+nfont = ImageFont.truetype(FONT_XB if os.path.exists(FONT_XB) else FONT_B, cfg.get("counter_size", 120))
+def fmt_num(v):
+    return f"{int(round(v)):,}".replace(",", " ")
+def counter_layer(c, t):
+    k = min(1, max(0, (t - c["t"]) / c.get("dur", 1.2)))
+    k = 1 - (1 - k) ** 4
+    txt = fmt_num(c.get("from", 0) + (c["to"] - c.get("from", 0)) * k) + c.get("suffix", "")
+    d0 = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    tw = int(d0.textlength(fmt_num(c["to"]) + c.get("suffix", ""), font=nfont))
+    h = int(cfg.get("counter_size", 120) * 1.45)
+    img = Image.new("RGBA", (tw + 110, h), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle((4, 4, img.width - 4, img.height - 4), radius=h // 2, fill=(20, 22, 40, 235), outline=(255, 221, 51, 255), width=6)
+    w = d.textlength(txt, font=nfont)
+    d.text(((img.width - w) / 2, (h - cfg.get("counter_size", 120) * 1.2) / 2), txt, font=nfont, fill=(255, 221, 51))
+    return img
+COUNTERS = cfg.get("counters", [])
+
 def glow(rad):
     g = np.mgrid[0:2 * rad, 0:2 * rad]
     dist = np.sqrt((g[1] - rad) ** 2 + (g[0] - rad) ** 2) / rad
@@ -209,6 +228,17 @@ for i in range(N):
             if alpha < 1:
                 lay = lay.copy(); lay.putalpha(lay.getchannel("A").point(lambda v: int(v * alpha)))
             fr.alpha_composite(lay, (0, TITLE_Y))
+    for c in COUNTERS:
+        if c["t"] <= t < c["end"]:
+            lay = counter_layer(c, t)
+            k = min(1, (t - c["t"]) / 0.25)
+            if k < 1:
+                s = 0.6 + 0.4 * k * (1 + 0.15 * math.sin(k * math.pi))
+                lay = lay.resize((max(1, int(lay.width * s)), max(1, int(lay.height * s))), Image.BICUBIC)
+            if t > c["end"] - 0.18:
+                q = (c["end"] - t) / 0.18
+                lay.putalpha(lay.getchannel("A").point(lambda v: int(v * q)))
+            fr.alpha_composite(lay, (int(c["x"] - lay.width / 2), int(c["y"] - lay.height / 2)))
     for card in CARDS:
         if card["t"] <= t < card["end"]:
             k = min(1, (t - card["t"]) / 0.3)
